@@ -107,6 +107,18 @@ function mockInvoke(cmd, args) {
     create_backup: () => ({ name: 'openclaw-20260226-160000.json', size: 8542 }),
     restore_backup: () => true,
     delete_backup: () => true,
+    get_cftunnel_status: () => ({
+      installed: true, version: 'cftunnel 0.7.0', running: true,
+      tunnel_name: 'mac-home', pid: 73325,
+      routes: [
+        { name: 'clawapp', domain: 'chat.qrj.ai', service: 'http://localhost:3210' },
+        { name: 'newapi', domain: 'newapi.qrj.ai', service: 'http://localhost:30080' },
+        { name: 'webhook', domain: 'webhook.qrj.ai', service: 'http://localhost:9801' },
+      ],
+    }),
+    cftunnel_action: () => true,
+    get_cftunnel_logs: () => '2026-02-26 13:29:01 [INFO] Tunnel started\n2026-02-26 13:30:00 [INFO] Connection healthy',
+    get_clawapp_status: () => ({ running: true, pid: 7752, port: 3210, url: 'http://localhost:3210' }),
   }
   const fn = mocks[cmd]
   return fn ? Promise.resolve(fn(args)) : Promise.reject(`未知命令: ${cmd}`)
@@ -148,4 +160,10 @@ export const api = {
   createBackup: () => invoke('create_backup'),
   restoreBackup: (name) => invoke('restore_backup', { name }),
   deleteBackup: (name) => invoke('delete_backup', { name }),
+
+  // 扩展工具
+  getCftunnelStatus: () => invoke('get_cftunnel_status'),
+  cftunnelAction: (action) => invoke('cftunnel_action', { action }),
+  getCftunnelLogs: (lines = 20) => invoke('get_cftunnel_logs', { lines }),
+  getClawappStatus: () => invoke('get_clawapp_status'),
 }

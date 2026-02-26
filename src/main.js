@@ -19,6 +19,8 @@ registerRoute('/logs', () => import('./pages/logs.js'))
 registerRoute('/models', () => import('./pages/models.js'))
 registerRoute('/gateway', () => import('./pages/gateway.js'))
 registerRoute('/memory', () => import('./pages/memory.js'))
+registerRoute('/extensions', () => import('./pages/extensions.js'))
+registerRoute('/about', () => import('./pages/about.js'))
 
 // 初始化主题
 initTheme()

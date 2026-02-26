@@ -1,7 +1,7 @@
 mod commands;
 mod models;
 
-use commands::{config, logs, memory, service};
+use commands::{config, extensions, logs, memory, service};
 
 pub fn run() {
     tauri::Builder::default()
@@ -33,6 +33,11 @@ pub fn run() {
             memory::write_memory_file,
             memory::delete_memory_file,
             memory::export_memory_zip,
+            // 扩展工具
+            extensions::get_cftunnel_status,
+            extensions::cftunnel_action,
+            extensions::get_cftunnel_logs,
+            extensions::get_clawapp_status,
         ])
         .run(tauri::generate_context!())
         .expect("启动 ClawPanel 失败");
