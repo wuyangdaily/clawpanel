@@ -85,13 +85,21 @@ async fn get_latest_version_for(source: &str) -> Option<String> {
 }
 
 /// 检测当前安装的是官方版还是汉化版
+/// 优先检查文件系统（不依赖 npm 命令的 PATH），fallback 到 npm list
 fn detect_installed_source() -> String {
-    let output = Command::new("npm")
+    // 方法1：直接检查 openclaw bin 的 symlink 指向
+    if let Ok(target) = std::fs::read_link("/opt/homebrew/bin/openclaw") {
+        if target.to_string_lossy().contains("openclaw-zh") {
+            return "chinese".into();
+        }
+        return "official".into();
+    }
+    // 方法2：fallback 到 npm list
+    if let Ok(o) = Command::new("npm")
         .args(["list", "-g", "@qingchencloud/openclaw-zh", "--depth=0"])
-        .output();
-    if let Ok(o) = output {
-        let text = String::from_utf8_lossy(&o.stdout);
-        if text.contains("openclaw-zh@") {
+        .output()
+    {
+        if String::from_utf8_lossy(&o.stdout).contains("openclaw-zh@") {
             return "chinese".into();
         }
     }
