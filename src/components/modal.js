@@ -134,3 +134,63 @@ export function showModal({ title, fields, onConfirm }) {
   const firstInput = overlay.querySelector('input, select')
   if (firstInput) firstInput.focus()
 }
+
+/**
+ * 升级进度弹窗 — 带进度条和实时日志
+ * @returns {{ appendLog, setProgress, setDone, setError, destroy }}
+ */
+export function showUpgradeModal() {
+  const overlay = document.createElement('div')
+  overlay.className = 'modal-overlay'
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:520px">
+      <div class="modal-title">升级 OpenClaw</div>
+      <div class="upgrade-progress-wrap">
+        <div class="upgrade-progress-bar"><div class="upgrade-progress-fill" style="width:0%"></div></div>
+        <div class="upgrade-progress-text">准备中...</div>
+      </div>
+      <div class="upgrade-log-box"></div>
+      <div class="modal-actions">
+        <button class="btn btn-secondary btn-sm" data-action="close" disabled>关闭</button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+
+  const fill = overlay.querySelector('.upgrade-progress-fill')
+  const text = overlay.querySelector('.upgrade-progress-text')
+  const logBox = overlay.querySelector('.upgrade-log-box')
+  const closeBtn = overlay.querySelector('[data-action="close"]')
+
+  closeBtn.onclick = () => overlay.remove()
+  overlay.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !closeBtn.disabled) overlay.remove()
+  })
+
+  return {
+    appendLog(line) {
+      const div = document.createElement('div')
+      div.textContent = line
+      logBox.appendChild(div)
+      logBox.scrollTop = logBox.scrollHeight
+    },
+    setProgress(pct) {
+      fill.style.width = pct + '%'
+      text.textContent = pct >= 100 ? '完成' : `升级中... ${pct}%`
+    },
+    setDone(msg) {
+      text.textContent = msg || '升级完成'
+      fill.style.width = '100%'
+      fill.classList.add('done')
+      closeBtn.disabled = false
+      closeBtn.focus()
+    },
+    setError(msg) {
+      text.textContent = msg || '升级失败'
+      fill.classList.add('error')
+      closeBtn.disabled = false
+      closeBtn.focus()
+    },
+    destroy() { overlay.remove() },
+  }
+}

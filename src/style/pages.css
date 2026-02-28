@@ -173,3 +173,45 @@
   padding: var(--space-sm) var(--space-lg);
   border-bottom: 1px solid var(--border-secondary);
 }
+
+/* 升级进度弹窗 */
+.upgrade-progress-wrap {
+  margin-bottom: var(--space-md);
+}
+
+.upgrade-progress-bar {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: var(--space-xs);
+}
+
+.upgrade-progress-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.upgrade-progress-fill.done { background: var(--success); }
+.upgrade-progress-fill.error { background: var(--error); }
+
+.upgrade-progress-text {
+  font-size: var(--font-size-xs);
+  color: var(--text-secondary);
+}
+
+.upgrade-log-box {
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}

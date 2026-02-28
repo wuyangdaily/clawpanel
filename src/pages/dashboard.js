@@ -70,7 +70,7 @@ function renderStatCards(page, services, version) {
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
-        <span class="stat-card-label">版本</span>
+        <span class="stat-card-label">版本 · ${version.source === 'official' ? '官方' : '汉化'}</span>
       </div>
       <div class="stat-card-value">${version.current || '未知'}</div>
       <div class="stat-card-meta">${version.update_available ? '有新版本: ' + version.latest : '已是最新'}</div>

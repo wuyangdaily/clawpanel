@@ -70,54 +70,130 @@ fn get_local_version() -> Option<String> {
 }
 
 /// 从 npm registry 获取最新版本号，超时 5 秒
-async fn get_latest_version() -> Option<String> {
+async fn get_latest_version_for(source: &str) -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .ok()?;
-    let resp = client
-        .get("https://registry.npmjs.org/@qingchencloud%2Fopenclaw-zh/latest")
-        .send()
-        .await
-        .ok()?;
+    let pkg = npm_package_name(source).replace('/', "%2F").replace('@', "%40");
+    let url = format!("https://registry.npmjs.org/{pkg}/latest");
+    let resp = client.get(&url).send().await.ok()?;
     let json: Value = resp.json().await.ok()?;
     json.get("version")
         .and_then(|v| v.as_str())
         .map(String::from)
 }
 
+/// 检测当前安装的是官方版还是汉化版
+fn detect_installed_source() -> String {
+    let output = Command::new("npm")
+        .args(["list", "-g", "@qingchencloud/openclaw-zh", "--depth=0"])
+        .output();
+    if let Ok(o) = output {
+        let text = String::from_utf8_lossy(&o.stdout);
+        if text.contains("openclaw-zh@") {
+            return "chinese".into();
+        }
+    }
+    "official".into()
+}
+
 #[tauri::command]
 pub async fn get_version_info() -> Result<VersionInfo, String> {
     let current = get_local_version();
-    let latest = get_latest_version().await;
+    let source = detect_installed_source();
+    let latest = get_latest_version_for(&source).await;
+    let parse_ver = |v: &str| -> Vec<u32> {
+        v.split(|c: char| !c.is_ascii_digit())
+            .filter_map(|s| s.parse().ok())
+            .collect()
+    };
     let update_available = match (&current, &latest) {
-        (Some(c), Some(l)) => l != c,
+        (Some(c), Some(l)) => parse_ver(l) > parse_ver(c),
         _ => false,
     };
     Ok(VersionInfo {
         current,
         latest,
         update_available,
+        source,
     })
 }
 
-/// 执行 npm 全局升级 openclaw
+/// npm 包名映射
+fn npm_package_name(source: &str) -> &'static str {
+    match source {
+        "official" => "openclaw",
+        _ => "@qingchencloud/openclaw-zh",
+    }
+}
+
+/// 执行 npm 全局升级 openclaw（流式推送日志）
 #[tauri::command]
-pub async fn upgrade_openclaw() -> Result<String, String> {
-    let output = Command::new("npm")
-        .args(["install", "-g", "@qingchencloud/openclaw-zh@latest"])
-        .output()
-        .map_err(|e| format!("执行升级命令失败: {e}"))?;
+pub async fn upgrade_openclaw(app: tauri::AppHandle, source: String) -> Result<String, String> {
+    use std::process::Stdio;
+    use std::io::{BufRead, BufReader};
+    use tauri::Emitter;
 
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let current_source = detect_installed_source();
+    let pkg = format!("{}@latest", npm_package_name(&source));
 
-    if !output.status.success() {
-        return Err(format!("升级失败: {stderr}"));
+    // 切换源时先卸载旧包，避免 bin 冲突
+    if current_source != source {
+        let old_pkg = npm_package_name(&current_source);
+        let _ = app.emit("upgrade-log", format!("正在卸载旧版本 ({old_pkg})..."));
+        let _ = app.emit("upgrade-progress", 5);
+        let _ = Command::new("npm")
+            .args(["uninstall", "-g", old_pkg])
+            .output();
     }
 
-    // 获取升级后的版本号
+    let _ = app.emit("upgrade-log", format!("$ npm install -g {pkg}"));
+    let _ = app.emit("upgrade-progress", 10);
+
+    let mut child = Command::new("npm")
+        .args(["install", "-g", &pkg])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("执行升级命令失败: {e}"))?;
+
+    // 读取 stderr（npm 主要输出在 stderr）
+    let stderr = child.stderr.take();
+    let stdout = child.stdout.take();
+
+    let _ = app.emit("upgrade-progress", 30);
+
+    let app2 = app.clone();
+    let handle = std::thread::spawn(move || {
+        if let Some(pipe) = stderr {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let _ = app2.emit("upgrade-log", &line);
+            }
+        }
+    });
+
+    if let Some(pipe) = stdout {
+        for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+            let _ = app.emit("upgrade-log", &line);
+        }
+    }
+
+    let _ = handle.join();
+    let _ = app.emit("upgrade-progress", 80);
+
+    let status = child.wait().map_err(|e| format!("等待进程失败: {e}"))?;
+    let _ = app.emit("upgrade-progress", 100);
+
+    if !status.success() {
+        let _ = app.emit("upgrade-log", "❌ 升级失败");
+        return Err("升级失败，请查看日志".into());
+    }
+
     let new_ver = get_local_version().unwrap_or_else(|| "未知".into());
-    Ok(format!("升级成功，当前版本: {new_ver}"))
+    let msg = format!("✅ 升级成功，当前版本: {new_ver}");
+    let _ = app.emit("upgrade-log", &msg);
+    Ok(msg)
 }
 
 #[tauri::command]

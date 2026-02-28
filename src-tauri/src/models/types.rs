@@ -13,4 +13,5 @@ pub struct VersionInfo {
     pub current: Option<String>,
     pub latest: Option<String>,
     pub update_available: bool,
+    pub source: String,
 }

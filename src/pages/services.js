@@ -4,7 +4,7 @@
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
-import { showConfirm } from '../components/modal.js'
+import { showConfirm, showUpgradeModal } from '../components/modal.js'
 
 // HTML 转义，防止 XSS
 function escapeHtml(str) {
@@ -51,21 +51,32 @@ async function loadAll(page) {
 
 // ===== 版本检测 =====
 
+// 后端检测到的当前安装源
+let detectedSource = 'chinese'
+
 async function loadVersion(page) {
   const bar = page.querySelector('#version-bar')
   try {
     const info = await api.getVersionInfo()
+    detectedSource = info.source || 'chinese'
     const ver = info.current || '未知'
     const hasUpdate = info.update_available
+    const isChinese = detectedSource === 'chinese'
+    const sourceTag = isChinese ? '汉化优化版' : '官方原版'
+    const switchLabel = isChinese ? '切换到官方版' : '切换到汉化版'
+    const switchTarget = isChinese ? 'official' : 'chinese'
     bar.innerHTML = `
       <div class="stat-cards" style="margin-bottom:var(--space-lg)">
         <div class="stat-card">
           <div class="stat-card-header">
-            <span class="stat-card-label">当前版本</span>
+            <span class="stat-card-label">当前版本 · <span style="color:var(--accent)">${sourceTag}</span></span>
           </div>
           <div class="stat-card-value">${ver}</div>
           <div class="stat-card-meta">${hasUpdate ? '新版本: ' + info.latest : '已是最新版本'}</div>
-          ${hasUpdate ? '<button class="btn btn-primary btn-sm" data-action="upgrade" style="margin-top:var(--space-sm)">升级到最新版</button>' : ''}
+          <div style="display:flex;gap:var(--space-sm);margin-top:var(--space-sm);flex-wrap:wrap">
+            ${hasUpdate ? '<button class="btn btn-primary btn-sm" data-action="upgrade">升级到最新版</button>' : ''}
+            <button class="btn btn-secondary btn-sm" data-action="switch-source" data-source="${switchTarget}">${switchLabel}</button>
+          </div>
         </div>
       </div>
     `
@@ -194,6 +205,9 @@ function bindEvents(page) {
         case 'upgrade':
           await handleUpgrade(btn, page)
           break
+        case 'switch-source':
+          await handleSwitchSource(btn.dataset.source, page)
+          break
         case 'install-gateway':
           await handleInstallGateway(btn, page)
           break
@@ -246,13 +260,37 @@ async function handleDeleteBackup(name, page) {
 
 // ===== 升级操作 =====
 
+async function doUpgradeWithModal(source, page) {
+  const modal = showUpgradeModal()
+  let unlistenLog, unlistenProgress
+  try {
+    const { listen } = await import('@tauri-apps/api/event')
+    unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+    unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
+    const msg = await api.upgradeOpenclaw(source)
+    modal.setDone(msg)
+    await loadVersion(page)
+  } catch (e) {
+    modal.appendLog(String(e))
+    modal.setError('升级失败')
+  } finally {
+    unlistenLog?.()
+    unlistenProgress?.()
+  }
+}
+
 async function handleUpgrade(btn, page) {
-  const yes = await showConfirm('确定要升级 OpenClaw 到最新版本吗？\n升级过程中 Gateway 会短暂中断。')
+  const sourceLabel = detectedSource === 'official' ? '官方原版' : '汉化优化版'
+  const yes = await showConfirm(`确定要升级 OpenClaw 到最新${sourceLabel}吗？\n升级过程中 Gateway 会短暂中断。`)
   if (!yes) return
-  btn.textContent = '升级中...'
-  const msg = await api.upgradeOpenclaw()
-  toast(msg, 'success')
-  await loadVersion(page)
+  await doUpgradeWithModal(detectedSource, page)
+}
+
+async function handleSwitchSource(target, page) {
+  const targetLabel = target === 'official' ? '官方原版' : '汉化优化版'
+  const yes = await showConfirm(`确定要切换到${targetLabel}吗？\n这会安装对应的 npm 包，配置数据不受影响。`)
+  if (!yes) return
+  await doUpgradeWithModal(target, page)
 }
 
 // ===== Gateway 安装/卸载 =====

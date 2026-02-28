@@ -4,6 +4,7 @@
  */
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
+import { showUpgradeModal } from '../components/modal.js'
 
 export async function render() {
   const page = document.createElement('div')
@@ -71,7 +72,7 @@ async function loadData(page) {
         <div class="stat-card-meta">Tauri v2 桌面应用</div>
       </div>
       <div class="stat-card">
-        <div class="stat-card-header"><span class="stat-card-label">OpenClaw</span></div>
+        <div class="stat-card-header"><span class="stat-card-label">OpenClaw · ${version.source === 'official' ? '官方版' : '汉化版'}</span></div>
         <div class="stat-card-value">${version.current || '未安装'}</div>
         <div class="stat-card-meta" style="display:flex;align-items:center;gap:8px">
           ${version.update_available
@@ -90,17 +91,21 @@ async function loadData(page) {
     const upgradeBtn = cards.querySelector('#btn-upgrade')
     if (upgradeBtn) {
       upgradeBtn.onclick = async () => {
-        upgradeBtn.disabled = true
-        upgradeBtn.textContent = '升级中...'
+        const modal = showUpgradeModal()
+        let unlistenLog, unlistenProgress
         try {
+          const { listen } = await import('@tauri-apps/api/event')
+          unlistenLog = await listen('upgrade-log', (e) => modal.appendLog(e.payload))
+          unlistenProgress = await listen('upgrade-progress', (e) => modal.setProgress(e.payload))
           const msg = await api.upgradeOpenclaw()
-          upgradeBtn.textContent = '完成'
-          // 刷新版本信息
+          modal.setDone(msg)
           loadData(page)
         } catch (e) {
-          upgradeBtn.disabled = false
-          upgradeBtn.textContent = '升级失败'
-          toast('升级失败: ' + e, 'error')
+          modal.appendLog(String(e))
+          modal.setError('升级失败')
+        } finally {
+          unlistenLog?.()
+          unlistenProgress?.()
         }
       }
     }

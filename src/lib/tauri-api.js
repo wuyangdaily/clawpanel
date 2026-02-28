@@ -141,7 +141,7 @@ export const api = {
   readMcpConfig: () => invoke('read_mcp_config'),
   writeMcpConfig: (config) => invoke('write_mcp_config', { config }),
   reloadGateway: () => invoke('reload_gateway'),
-  upgradeOpenclaw: () => invoke('upgrade_openclaw'),
+  upgradeOpenclaw: (source = 'chinese') => invoke('upgrade_openclaw', { source }),
   installGateway: () => invoke('install_gateway'),
   uninstallGateway: () => invoke('uninstall_gateway'),
   testModel: (baseUrl, apiKey, modelId) => invoke('test_model', { baseUrl, apiKey, modelId }),
