@@ -109,7 +109,11 @@ fn patch_gateway_origins() {
     };
 
     // Tauri v2: macOS/Linux 用 tauri://localhost，Windows 用 https://tauri.localhost
-    let origins = serde_json::json!(["tauri://localhost", "https://tauri.localhost", "http://localhost"]);
+    let origins = serde_json::json!([
+        "tauri://localhost",
+        "https://tauri.localhost",
+        "http://localhost"
+    ]);
 
     if let Some(obj) = config.as_object_mut() {
         let gateway = obj
