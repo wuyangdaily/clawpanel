@@ -1,345 +1,717 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ClawPanel - OpenClaw 可视化管理面板</title>
-  <meta name="description" content="ClawPanel 是基于 Tauri v2 构建的跨平台桌面应用，为 OpenClaw AI Agent 框架提供可视化管理界面。">
+  <title>ClawPanel - OpenClaw AI Agent 可视化管理面板</title>
+  <meta name="description" content="ClawPanel 是基于 Tauri v2 的跨平台桌面应用，为 OpenClaw AI Agent 框架提供可视化管理面板。仪表盘监控、模型配置、实时聊天、记忆管理、内网穿透，一站式管理。">
+  <meta name="keywords" content="ClawPanel, OpenClaw, AI Agent, Tauri, 管理面板, 桌面应用, 开源, LLM, 多模型">
+  <meta property="og:title" content="ClawPanel - OpenClaw AI Agent 可视化管理面板">
+  <meta property="og:description" content="基于 Tauri v2 的跨平台桌面应用，为 OpenClaw AI Agent 框架提供可视化管理界面。">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://qingchencloud.github.io/clawpanel/">
+  <link rel="icon" href="https://raw.githubusercontent.com/qingchencloud/clawpanel/main/public/images/logo.svg" type="image/svg+xml">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', '"SF Mono"', '"Fira Code"', 'monospace'],
+          },
+        },
+      },
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg: #0a0a0f;
-      --bg-card: #12121a;
-      --bg-card-hover: #1a1a25;
-      --border: #1e1e2e;
-      --text: #e4e4ec;
-      --text-secondary: #9898a8;
-      --accent: #6366f1;
-      --accent-soft: rgba(99, 102, 241, 0.15);
-      --success: #22c55e;
-      --radius: 12px;
-      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: var(--font);
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
+    /* ── 基础重置 ── */
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; overflow-x: hidden; }
 
-    /* 顶部导航 */
-    .nav {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      background: rgba(10, 10, 15, 0.85);
-      backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-      padding: 0 24px;
-      height: 56px;
-      display: flex; align-items: center; justify-content: space-between;
+    /* ── 光刻机网格背景 ── */
+    .grid-bg {
+      background-image:
+        linear-gradient(rgba(99,102,241,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,102,241,0.03) 1px, transparent 1px);
+      background-size: 64px 64px;
+      mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+      -webkit-mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
     }
-    .nav-brand { display: flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; }
-    .nav-brand img { width: 28px; height: 28px; border-radius: 6px; }
-    .nav-links { display: flex; gap: 24px; font-size: 14px; }
-    .nav-links a { color: var(--text-secondary); transition: color 0.2s; }
-    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .dark .grid-bg {
+      background-image:
+        linear-gradient(rgba(99,102,241,0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,102,241,0.06) 1px, transparent 1px);
+    }
 
-    /* Hero 区域 */
-    .hero {
-      padding: 140px 24px 80px;
-      text-align: center;
+    /* ── 失焦能量球 ── */
+    .orb {
+      position: absolute;
+      border-radius: 50%;
+      filter: blur(100px);
+      pointer-events: none;
+      will-change: transform;
+    }
+    .orb-1 {
+      width: 600px; height: 600px;
+      background: rgba(99,102,241,0.12);
+      top: -200px; left: -100px;
+      animation: orbFloat1 20s ease-in-out infinite;
+    }
+    .orb-2 {
+      width: 500px; height: 500px;
+      background: rgba(168,85,247,0.08);
+      top: -100px; right: -150px;
+      animation: orbFloat2 25s ease-in-out infinite;
+    }
+    .orb-3 {
+      width: 400px; height: 400px;
+      background: rgba(34,211,238,0.06);
+      bottom: -100px; left: 30%;
+      animation: orbFloat3 18s ease-in-out infinite;
+    }
+    @keyframes orbFloat1 { 0%,100% { transform: translate(0,0) } 50% { transform: translate(40px,30px) } }
+    @keyframes orbFloat2 { 0%,100% { transform: translate(0,0) } 50% { transform: translate(-30px,40px) } }
+    @keyframes orbFloat3 { 0%,100% { transform: translate(0,0) } 50% { transform: translate(20px,-25px) } }
+
+    /* Light 模式能量球更淡 */
+    html:not(.dark) .orb-1 { background: rgba(99,102,241,0.06); }
+    html:not(.dark) .orb-2 { background: rgba(168,85,247,0.04); }
+    html:not(.dark) .orb-3 { background: rgba(34,211,238,0.03); }
+
+    /* ── 流光渐变字 ── */
+    .gradient-text {
+      background: linear-gradient(135deg, #6366f1, #a855f7, #22d3ee, #6366f1);
+      background-size: 300% 300%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: gradientShift 6s ease-in-out infinite;
+    }
+    @keyframes gradientShift {
+      0%,100% { background-position: 0% 50% }
+      50% { background-position: 100% 50% }
+    }
+
+    /* ── 旋转流光边框 ── */
+    .glow-border {
+      position: relative;
+      z-index: 0;
+    }
+    .glow-border::before {
+      content: '';
+      position: absolute;
+      inset: -2px;
+      border-radius: inherit;
+      background: conic-gradient(from var(--glow-angle, 0deg), #6366f1, #a855f7, #22d3ee, #6366f1);
+      z-index: -2;
+      animation: glowSpin 3s linear infinite;
+    }
+    .glow-border::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      z-index: -1;
+    }
+    .dark .glow-border::after { background: #0a0a0f; }
+    html:not(.dark) .glow-border::after { background: #ffffff; }
+    @keyframes glowSpin {
+      to { --glow-angle: 360deg; }
+    }
+    @property --glow-angle {
+      syntax: "<angle>";
+      initial-value: 0deg;
+      inherits: false;
+    }
+
+    /* ── 磁性探照灯卡片 ── */
+    .spotlight-grid {
+      --mouse-x: 50%;
+      --mouse-y: 50%;
+    }
+    .spotlight-card {
       position: relative;
       overflow: hidden;
     }
-    .hero::before {
+    .spotlight-card::before {
       content: '';
       position: absolute;
-      top: -200px; left: 50%; transform: translateX(-50%);
-      width: 800px; height: 600px;
-      background: radial-gradient(ellipse, rgba(99, 102, 241, 0.12) 0%, transparent 70%);
+      inset: 0;
+      background: radial-gradient(
+        400px circle at var(--card-x, 50%) var(--card-y, 50%),
+        rgba(99,102,241,0.08),
+        transparent 60%
+      );
+      opacity: 0;
+      transition: opacity 0.4s;
       pointer-events: none;
+      z-index: 1;
     }
-    .hero h1 { font-size: 48px; font-weight: 700; margin-bottom: 16px; position: relative; }
-    .hero .subtitle { font-size: 18px; color: var(--text-secondary); max-width: 600px; margin: 0 auto 32px; position: relative; }
-    .hero-actions { display: flex; gap: 12px; justify-content: center; position: relative; }
-    .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 12px 24px; border-radius: 8px;
-      font-size: 14px; font-weight: 500;
-      border: none; cursor: pointer; transition: all 0.2s;
-      text-decoration: none;
+    .spotlight-card:hover::before {
+      opacity: 1;
     }
-    .btn:hover { text-decoration: none; }
-    .btn-primary {
-      background: var(--accent); color: #fff;
+    .spotlight-card::after {
+      content: '';
+      position: absolute;
+      inset: -1px;
+      border-radius: inherit;
+      background: radial-gradient(
+        300px circle at var(--card-x, 50%) var(--card-y, 50%),
+        rgba(99,102,241,0.25),
+        transparent 60%
+      );
+      opacity: 0;
+      transition: opacity 0.4s;
+      pointer-events: none;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
+      border-radius: inherit;
     }
-    .btn-primary:hover { background: #5558e6; transform: translateY(-1px); }
-    .btn-secondary {
-      background: var(--bg-card); color: var(--text);
-      border: 1px solid var(--border);
+    .spotlight-card:hover::after {
+      opacity: 1;
     }
-    .btn-secondary:hover { background: var(--bg-card-hover); transform: translateY(-1px); }
 
-    /* 内容区域 */
-    .container { max-width: 1000px; margin: 0 auto; padding: 0 24px; }
+    /* ── 滚动揭示动画 ── */
+    .reveal {
+      opacity: 0;
+      transform: translateY(30px) scale(0.97);
+      transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
+                  transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .reveal.revealed {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
 
-    /* 功能特性 */
-    .features { padding: 80px 0; }
-    .section-title {
-      font-size: 28px; font-weight: 600;
-      text-align: center; margin-bottom: 48px;
+    /* ── 跑马灯 ── */
+    .marquee-track {
+      display: flex;
+      width: max-content;
+      animation: marqueeScroll 30s linear infinite;
     }
-    .features-grid {
-      display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 16px;
+    .marquee-track:hover { animation-play-state: paused; }
+    @keyframes marqueeScroll {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
     }
-    .feature-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 24px;
-      transition: all 0.2s;
-    }
-    .feature-card:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--accent);
-      transform: translateY(-2px);
-    }
-    .feature-card h3 { font-size: 16px; margin-bottom: 8px; }
-    .feature-card p { font-size: 14px; color: var(--text-secondary); }
 
-    /* 技术架构 */
-    .tech { padding: 80px 0; }
-    .tech-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 14px;
+    /* ── 汉堡菜单 ── */
+    .mobile-menu {
+      transform: translateY(-100%);
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     }
-    .tech-table th, .tech-table td {
-      padding: 14px 20px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
+    .mobile-menu.open {
+      transform: translateY(0);
     }
-    .tech-table th {
-      font-weight: 500;
-      color: var(--text-secondary);
-      font-size: 12px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    .tech-table td:first-child { font-weight: 500; }
 
-    /* 快速开始 */
-    .quickstart { padding: 80px 0; }
-    .code-block {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px 24px;
-      font-family: "SF Mono", "Fira Code", monospace;
-      font-size: 13px;
-      line-height: 1.8;
-      overflow-x: auto;
-      margin: 16px 0;
+    /* ── 代码块 ── */
+    .code-line::before {
+      content: '$ ';
+      color: #6366f1;
     }
-    .code-block .comment { color: #6b7280; }
-    .code-block .cmd { color: var(--success); }
+    .code-comment::before {
+      content: '';
+    }
 
-    /* 相关项目 */
-    .projects { padding: 80px 0; }
-    .project-card {
-      display: flex; align-items: center; justify-content: space-between;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 20px 24px;
-      margin-bottom: 12px;
-      transition: all 0.2s;
+    /* ── 浮动卡片动画 ── */
+    @keyframes float {
+      0%,100% { transform: translateY(0px) }
+      50% { transform: translateY(-8px) }
     }
-    .project-card:hover {
-      background: var(--bg-card-hover);
-      border-color: var(--accent);
-    }
-    .project-card h3 { font-size: 15px; margin-bottom: 4px; }
-    .project-card p { font-size: 13px; color: var(--text-secondary); }
+    .float-card { animation: float 6s ease-in-out infinite; }
+    .float-card-delay { animation: float 6s ease-in-out 2s infinite; }
 
-    /* 页脚 */
-    .footer {
-      padding: 40px 0;
-      text-align: center;
-      font-size: 13px;
-      color: var(--text-secondary);
-      border-top: 1px solid var(--border);
-    }
-    .footer a { color: var(--text-secondary); }
-    .footer a:hover { color: var(--text); }
-
-    /* 响应式 */
-    @media (max-width: 640px) {
-      .hero h1 { font-size: 32px; }
-      .hero .subtitle { font-size: 15px; }
-      .hero-actions { flex-direction: column; align-items: center; }
-      .nav-links { display: none; }
-      .features-grid { grid-template-columns: 1fr; }
-    }
+    /* ── 无闪烁主题切换 ── */
+    html { transition: background-color 0.3s, color 0.3s; }
   </style>
+  <script>
+    /* 无闪烁主题初始化 */
+    (function(){
+      const saved = localStorage.getItem('clawpanel-theme')
+      if (saved === 'light') document.documentElement.classList.remove('dark')
+      else if (saved === 'dark') document.documentElement.classList.add('dark')
+      else if (!window.matchMedia('(prefers-color-scheme: dark)').matches) document.documentElement.classList.remove('dark')
+    })()
+  </script>
 </head>
-<body>
+<body class="bg-white dark:bg-[#0a0a0f] text-gray-900 dark:text-gray-100 font-sans">
 
-  <!-- 导航 -->
-  <nav class="nav">
-    <div class="nav-brand">
-      <img src="https://raw.githubusercontent.com/qingchencloud/clawpanel/main/public/images/logo.svg" alt="Logo">
-      <span>ClawPanel</span>
+  <!-- ══════════════ 导航 ══════════════ -->
+  <nav class="fixed top-0 inset-x-0 z-50 bg-white/80 dark:bg-[#0a0a0f]/80 backdrop-blur-2xl border-b border-gray-200 dark:border-white/[0.06]">
+    <div class="max-w-6xl mx-auto px-5 h-16 flex items-center justify-between">
+      <a href="#" class="flex items-center gap-2.5 font-bold text-lg tracking-tight no-underline text-gray-900 dark:text-white">
+        <img src="https://raw.githubusercontent.com/qingchencloud/clawpanel/main/public/images/logo.svg" alt="Logo" class="w-8 h-8 rounded-lg">
+        ClawPanel
+      </a>
+      <!-- 桌面导航 -->
+      <div class="hidden md:flex items-center gap-7 text-sm font-medium">
+        <a href="#features" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition no-underline">功能</a>
+        <a href="#tech" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition no-underline">架构</a>
+        <a href="#quickstart" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition no-underline">开始</a>
+        <a href="#projects" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition no-underline">生态</a>
+        <a href="https://github.com/qingchencloud/clawpanel" target="_blank" rel="noopener" class="text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white transition no-underline">GitHub</a>
+        <!-- 主题切换 -->
+        <button id="theme-toggle" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400 transition" aria-label="切换主题">
+          <svg id="icon-sun" class="w-4 h-4 hidden dark:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          <svg id="icon-moon" class="w-4 h-4 block dark:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+        </button>
+      </div>
+      <!-- 移动端按钮 -->
+      <div class="flex md:hidden items-center gap-2">
+        <button id="theme-toggle-mobile" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 text-gray-500 dark:text-gray-400 transition" aria-label="切换主题">
+          <svg class="w-4 h-4 hidden dark:block" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          <svg class="w-4 h-4 block dark:hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+        </button>
+        <button id="hamburger" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 text-gray-600 dark:text-gray-300" aria-label="菜单">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+      </div>
     </div>
-    <div class="nav-links">
-      <a href="#features">功能</a>
-      <a href="#tech">架构</a>
-      <a href="#quickstart">快速开始</a>
-      <a href="#projects">相关项目</a>
-      <a href="https://github.com/qingchencloud/clawpanel">GitHub</a>
+    <!-- 移动菜单 -->
+    <div id="mobile-menu" class="mobile-menu md:hidden absolute top-16 inset-x-0 bg-white/95 dark:bg-[#0a0a0f]/95 backdrop-blur-2xl border-b border-gray-200 dark:border-white/[0.06]">
+      <div class="px-5 py-4 flex flex-col gap-3 text-base font-medium">
+        <a href="#features" class="py-2 text-gray-600 dark:text-gray-300 no-underline mobile-link">功能</a>
+        <a href="#tech" class="py-2 text-gray-600 dark:text-gray-300 no-underline mobile-link">架构</a>
+        <a href="#quickstart" class="py-2 text-gray-600 dark:text-gray-300 no-underline mobile-link">开始</a>
+        <a href="#projects" class="py-2 text-gray-600 dark:text-gray-300 no-underline mobile-link">生态</a>
+        <a href="https://github.com/qingchencloud/clawpanel" target="_blank" rel="noopener" class="py-2 text-gray-600 dark:text-gray-300 no-underline">GitHub ↗</a>
+      </div>
     </div>
   </nav>
 
-  <!-- Hero -->
-  <section class="hero">
-    <h1>ClawPanel</h1>
-    <p class="subtitle">OpenClaw AI Agent 框架的可视化管理面板，基于 Tauri v2 构建的跨平台桌面应用。</p>
-    <div class="hero-actions">
-      <a class="btn btn-primary" href="https://github.com/qingchencloud/clawpanel/releases">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 12L3 7h3V2h4v5h3L8 12z" fill="currentColor"/><path d="M2 13h12v1H2v-1z" fill="currentColor"/></svg>
-        下载最新版
-      </a>
-      <a class="btn btn-secondary" href="https://github.com/qingchencloud/clawpanel">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
-        源代码
-      </a>
-    </div>
-  </section>
+  <!-- ══════════════ Hero ══════════════ -->
+  <section class="relative min-h-screen flex items-center justify-center overflow-hidden pt-16">
+    <!-- 背景层 -->
+    <div class="absolute inset-0 grid-bg"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
 
-  <!-- 功能特性 -->
-  <section id="features" class="features">
-    <div class="container">
-      <h2 class="section-title">功能特性</h2>
-      <div class="features-grid">
-        <div class="feature-card">
-          <h3>仪表盘</h3>
-          <p>系统运行概览，服务状态实时监控，一目了然掌握 OpenClaw 运行情况。</p>
-        </div>
-        <div class="feature-card">
-          <h3>服务管理</h3>
-          <p>OpenClaw 服务启停控制、版本检测与一键升级、配置备份与恢复。</p>
-        </div>
-        <div class="feature-card">
-          <h3>模型配置</h3>
-          <p>多服务商管理、模型增删改查、主模型选择、批量测试、延迟检测，支持自动保存与撤销。</p>
-        </div>
-        <div class="feature-card">
-          <h3>网关配置</h3>
-          <p>Gateway 端口、运行模式、认证方式可视化配置，即改即生效。</p>
-        </div>
-        <div class="feature-card">
-          <h3>日志查看</h3>
-          <p>多日志源实时查看与关键词搜索，快速定位运行异常。</p>
-        </div>
-        <div class="feature-card">
-          <h3>记忆管理</h3>
-          <p>OpenClaw 记忆文件的查看、编辑、分类管理与 ZIP 导出。</p>
-        </div>
-        <div class="feature-card">
-          <h3>扩展工具</h3>
-          <p>cftunnel 内网穿透管理、ClawApp 连接状态监控等扩展功能。</p>
-        </div>
-        <div class="feature-card">
-          <h3>主题切换</h3>
-          <p>支持暗色与亮色主题切换，适应不同使用环境偏好。</p>
-        </div>
+    <div class="relative z-10 max-w-4xl mx-auto px-5 text-center py-24 md:py-32">
+      <!-- 标签 -->
+      <div class="reveal inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-indigo-500/20 bg-indigo-500/5 text-sm text-indigo-400 dark:text-indigo-300 mb-8">
+        <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></span>
+        v0.2.1 已发布 &mdash; 支持聊天图片 &amp; 灯箱查看
       </div>
-    </div>
-  </section>
 
-  <!-- 技术架构 -->
-  <section id="tech" class="tech">
-    <div class="container">
-      <h2 class="section-title">技术架构</h2>
-      <table class="tech-table">
-        <thead>
-          <tr><th>层级</th><th>技术</th><th>说明</th></tr>
-        </thead>
-        <tbody>
-          <tr><td>前端</td><td>Vanilla JS + Vite</td><td>零框架依赖，轻量快速</td></tr>
-          <tr><td>后端</td><td>Rust + Tauri v2</td><td>原生性能，跨平台打包</td></tr>
-          <tr><td>通信</td><td>Tauri IPC + Shell Plugin</td><td>前后端桥接，本地命令执行</td></tr>
-          <tr><td>样式</td><td>纯 CSS (CSS Variables)</td><td>暗色主题，玻璃拟态风格</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
+      <!-- 主标题 -->
+      <h1 class="reveal text-5xl sm:text-6xl md:text-7xl font-black tracking-tighter leading-[1.05] mb-6">
+        管理你的
+        <span class="gradient-text">AI Agent</span>
+        <br class="hidden sm:block">从未如此直观
+      </h1>
 
-  <!-- 快速开始 -->
-  <section id="quickstart" class="quickstart">
-    <div class="container">
-      <h2 class="section-title">快速开始</h2>
-
-      <h3 style="font-size:16px;margin-bottom:8px">前置条件</h3>
-      <p style="font-size:14px;color:var(--text-secondary);margin-bottom:24px">
-        需要安装 <a href="https://nodejs.org/">Node.js</a> >= 18、<a href="https://www.rust-lang.org/tools/install">Rust</a> stable 以及 <a href="https://v2.tauri.app/start/prerequisites/">Tauri v2 系统依赖</a>。
+      <!-- 副标题 -->
+      <p class="reveal text-lg md:text-xl text-gray-500 dark:text-gray-400 max-w-2xl mx-auto mb-10 leading-relaxed">
+        ClawPanel 是 <strong class="text-gray-700 dark:text-gray-200">OpenClaw</strong> 的可视化管理面板，基于 Tauri v2 构建。<br class="hidden md:block">
+        仪表盘、模型配置、实时聊天、记忆管理 — 一站式掌控。
       </p>
 
-      <div class="code-block">
-        <span class="comment"># 克隆仓库</span><br>
-        <span class="cmd">git clone https://github.com/qingchencloud/clawpanel.git</span><br>
-        <span class="cmd">cd clawpanel</span><br>
-        <span class="cmd">npm install</span><br>
-        <br>
-        <span class="comment"># 启动开发模式（完整 Tauri 桌面应用）</span><br>
-        <span class="cmd">./scripts/dev.sh</span><br>
-        <br>
-        <span class="comment"># 仅启动前端（浏览器调试，使用 mock 数据）</span><br>
-        <span class="cmd">./scripts/dev.sh web</span><br>
-        <br>
-        <span class="comment"># 构建发布版本</span><br>
-        <span class="cmd">./scripts/build.sh release</span>
+      <!-- CTA 按钮 -->
+      <div class="reveal flex flex-col sm:flex-row gap-4 justify-center items-center">
+        <a href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener"
+           class="glow-border rounded-xl px-8 py-3.5 font-semibold text-white bg-indigo-500 hover:bg-indigo-600 transition-colors no-underline flex items-center gap-2.5 text-base">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>
+          下载最新版
+        </a>
+        <a href="https://github.com/qingchencloud/clawpanel" target="_blank" rel="noopener"
+           class="rounded-xl px-8 py-3.5 font-semibold border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors no-underline flex items-center gap-2.5 text-base text-gray-700 dark:text-gray-200">
+          <svg class="w-5 h-5" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+          源代码
+        </a>
       </div>
     </div>
   </section>
 
-  <!-- 相关项目 -->
-  <section id="projects" class="projects">
-    <div class="container">
-      <h2 class="section-title">相关项目</h2>
-      <a class="project-card" href="https://github.com/openclaw/openclaw" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
-        <div>
-          <h3>OpenClaw</h3>
-          <p>AI Agent 框架，支持多模型协作、工具调用、记忆管理</p>
+  <!-- ══════════════ 数据面板 ══════════════ -->
+  <section class="relative py-20 overflow-hidden">
+    <div class="absolute inset-0 grid-bg"></div>
+    <div class="relative z-10 max-w-5xl mx-auto px-5">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4 md:gap-6">
+        <div class="reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/60 dark:bg-white/[0.02] backdrop-blur-sm p-6 text-center float-card">
+          <div class="text-3xl md:text-4xl font-black tracking-tight text-indigo-500 counter" data-target="10">0</div>
+          <div class="text-sm text-gray-500 dark:text-gray-400 mt-2">管理页面</div>
         </div>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="var(--text-secondary)"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-      </a>
-      <a class="project-card" href="https://github.com/qingchencloud/clawapp" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
-        <div>
-          <h3>ClawApp</h3>
-          <p>跨平台移动聊天客户端，H5 + 代理服务器架构</p>
+        <div class="reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/60 dark:bg-white/[0.02] backdrop-blur-sm p-6 text-center float-card-delay">
+          <div class="text-3xl md:text-4xl font-black tracking-tight text-purple-500 counter" data-target="3">0</div>
+          <div class="text-sm text-gray-500 dark:text-gray-400 mt-2">平台支持</div>
         </div>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="var(--text-secondary)"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-      </a>
-      <a class="project-card" href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener" style="text-decoration:none;color:inherit">
-        <div>
-          <h3>cftunnel</h3>
-          <p>Cloudflare Tunnel 内网穿透工具，全协议支持</p>
+        <div class="reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/60 dark:bg-white/[0.02] backdrop-blur-sm p-6 text-center float-card">
+          <div class="text-3xl md:text-4xl font-black tracking-tight text-cyan-500 counter" data-target="0" data-suffix="依赖">0</div>
+          <div class="text-sm text-gray-500 dark:text-gray-400 mt-2">前端框架</div>
         </div>
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="var(--text-secondary)"><path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-      </a>
+        <div class="reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/60 dark:bg-white/[0.02] backdrop-blur-sm p-6 text-center float-card-delay">
+          <div class="text-3xl md:text-4xl font-black tracking-tight text-emerald-500 counter" data-target="100" data-suffix="%">0</div>
+          <div class="text-sm text-gray-500 dark:text-gray-400 mt-2">开源免费</div>
+        </div>
+      </div>
     </div>
   </section>
 
-  <!-- 页脚 -->
-  <footer class="footer">
-    <div class="container">
-      <p>MIT License &copy; 2026 <a href="https://github.com/qingchencloud">qingchencloud</a></p>
+  <!-- ══════════════ 功能特性 ══════════════ -->
+  <section id="features" class="relative py-24 overflow-hidden">
+    <div class="orb orb-3"></div>
+    <div class="relative z-10 max-w-5xl mx-auto px-5">
+      <div class="text-center mb-16">
+        <h2 class="reveal text-3xl md:text-4xl font-black tracking-tighter mb-4">
+          强大的 <span class="gradient-text">功能矩阵</span>
+        </h2>
+        <p class="reveal text-gray-500 dark:text-gray-400 max-w-lg mx-auto">一个面板，管理 OpenClaw 的方方面面</p>
+      </div>
+
+      <div class="spotlight-grid grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="feature-grid">
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">📊</div>
+          <h3 class="font-bold text-base mb-2">仪表盘</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">系统运行概览，服务状态实时监控，一目了然掌握 OpenClaw 运行情况。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">⚙️</div>
+          <h3 class="font-bold text-base mb-2">服务管理</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">启停控制、版本检测与一键升级、配置备份与恢复，全生命周期管理。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">🧠</div>
+          <h3 class="font-bold text-base mb-2">模型配置</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">多服务商管理、批量测试、延迟检测，支持自动保存与撤销。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">💬</div>
+          <h3 class="font-bold text-base mb-2">实时聊天</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">WebSocket 流式对话、图片附件、多模态、会话管理、Markdown 渲染。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">🗂️</div>
+          <h3 class="font-bold text-base mb-2">记忆管理</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">记忆文件查看、编辑、分类管理与 ZIP 导出，让 Agent 更有记忆。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">🌐</div>
+          <h3 class="font-bold text-base mb-2">网关配置</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">Gateway 端口、运行模式、认证方式可视化配置，即改即生效。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">🔌</div>
+          <h3 class="font-bold text-base mb-2">扩展工具</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">cftunnel 内网穿透管理、ClawApp 连接状态监控等扩展功能。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">📋</div>
+          <h3 class="font-bold text-base mb-2">日志 &amp; 诊断</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">多日志源实时查看、搜索、系统诊断一键修复，快速定位问题。</p>
+        </div>
+        <div class="spotlight-card reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 transition-all duration-300 hover:-translate-y-1">
+          <div class="text-2xl mb-3">🎨</div>
+          <h3 class="font-bold text-base mb-2">暗色 / 亮色</h3>
+          <p class="text-sm text-gray-500 dark:text-gray-400 leading-relaxed">主题自动跟随系统或手动切换，毛玻璃质感 UI 设计。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 技术架构 ══════════════ -->
+  <section id="tech" class="relative py-24 overflow-hidden">
+    <div class="absolute inset-0 grid-bg"></div>
+    <div class="relative z-10 max-w-4xl mx-auto px-5">
+      <div class="text-center mb-16">
+        <h2 class="reveal text-3xl md:text-4xl font-black tracking-tighter mb-4">
+          现代 <span class="gradient-text">技术栈</span>
+        </h2>
+        <p class="reveal text-gray-500 dark:text-gray-400">极致轻量，极致性能</p>
+      </div>
+
+      <div class="reveal grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div class="rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-orange-500/10 flex items-center justify-center text-lg">🦀</div>
+            <div>
+              <div class="font-bold text-sm">Rust + Tauri v2</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">后端 &amp; 桌面框架</div>
+            </div>
+          </div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">原生性能，跨平台编译。Windows / macOS / Linux 三端统一。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-yellow-500/10 flex items-center justify-center text-lg">⚡</div>
+            <div>
+              <div class="font-bold text-sm">Vanilla JS + Vite</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">前端</div>
+            </div>
+          </div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">零框架依赖，毫秒级 HMR，构建产物极小。纯粹、快速、可控。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-indigo-500/10 flex items-center justify-center text-lg">🔗</div>
+            <div>
+              <div class="font-bold text-sm">WebSocket + IPC</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">通信层</div>
+            </div>
+          </div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">Tauri IPC 前后端桥接，WebSocket 直连 Gateway，实时双向通信。</p>
+        </div>
+        <div class="rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6">
+          <div class="flex items-center gap-3 mb-3">
+            <div class="w-10 h-10 rounded-xl bg-cyan-500/10 flex items-center justify-center text-lg">🎭</div>
+            <div>
+              <div class="font-bold text-sm">CSS Variables + Glassmorphism</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">视觉体系</div>
+            </div>
+          </div>
+          <p class="text-sm text-gray-500 dark:text-gray-400">CSS 变量驱动主题切换，毛玻璃卡片、渐变色彩、暗色优先设计。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 技术跑马灯 ══════════════ -->
+  <section class="py-12 border-y border-gray-200 dark:border-white/[0.06] overflow-hidden">
+    <div class="marquee-track text-sm font-mono text-gray-400 dark:text-gray-500">
+      <span class="px-8">Rust</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">Tauri v2</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Vanilla JS</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">Vite</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">WebSocket</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Ed25519</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">IPC</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">Glassmorphism</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">CSS Variables</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">OpenClaw</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">MIT License</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Cross-Platform</span><span class="px-8 text-cyan-400">◆</span>
+      <!-- 重复一份实现无缝滚动 -->
+      <span class="px-8">Rust</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">Tauri v2</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Vanilla JS</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">Vite</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">WebSocket</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Ed25519</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">IPC</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">Glassmorphism</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">CSS Variables</span><span class="px-8 text-cyan-400">◆</span>
+      <span class="px-8">OpenClaw</span><span class="px-8 text-indigo-400">◆</span>
+      <span class="px-8">MIT License</span><span class="px-8 text-purple-400">◆</span>
+      <span class="px-8">Cross-Platform</span><span class="px-8 text-cyan-400">◆</span>
+    </div>
+  </section>
+
+  <!-- ══════════════ 快速开始 ══════════════ -->
+  <section id="quickstart" class="relative py-24 overflow-hidden">
+    <div class="orb" style="width:500px;height:500px;background:rgba(168,85,247,0.06);top:50%;right:-200px;filter:blur(120px);animation:orbFloat2 22s ease-in-out infinite"></div>
+    <div class="relative z-10 max-w-3xl mx-auto px-5">
+      <div class="text-center mb-16">
+        <h2 class="reveal text-3xl md:text-4xl font-black tracking-tighter mb-4">
+          <span class="gradient-text">三步</span> 开始开发
+        </h2>
+        <p class="reveal text-gray-500 dark:text-gray-400">Node.js 18+ &amp; Rust stable &amp; <a href="https://v2.tauri.app/start/prerequisites/" class="text-indigo-400 hover:text-indigo-300 no-underline" target="_blank" rel="noopener">Tauri v2 依赖</a></p>
+      </div>
+
+      <div class="reveal rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-[#0d0d14]/80 backdrop-blur-sm overflow-hidden">
+        <div class="flex items-center gap-2 px-5 py-3 border-b border-gray-200 dark:border-white/[0.06]">
+          <div class="w-3 h-3 rounded-full bg-red-400/80"></div>
+          <div class="w-3 h-3 rounded-full bg-yellow-400/80"></div>
+          <div class="w-3 h-3 rounded-full bg-green-400/80"></div>
+          <span class="ml-3 text-xs text-gray-400 font-mono">terminal</span>
+        </div>
+        <div class="p-5 font-mono text-sm leading-8 text-gray-600 dark:text-gray-300 overflow-x-auto">
+          <div class="text-gray-400 dark:text-gray-500"># 克隆 &amp; 安装</div>
+          <div class="code-line">git clone https://github.com/qingchencloud/clawpanel.git</div>
+          <div class="code-line">cd clawpanel &amp;&amp; npm install</div>
+          <div class="mt-4 text-gray-400 dark:text-gray-500"># 启动开发（完整 Tauri 桌面应用）</div>
+          <div class="code-line">cargo tauri dev</div>
+          <div class="mt-4 text-gray-400 dark:text-gray-500"># 或仅启动前端（浏览器调试）</div>
+          <div class="code-line">npm run dev</div>
+          <div class="mt-4 text-gray-400 dark:text-gray-500"># 构建发布</div>
+          <div class="code-line">cargo tauri build</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 生态项目 ══════════════ -->
+  <section id="projects" class="relative py-24 overflow-hidden">
+    <div class="absolute inset-0 grid-bg"></div>
+    <div class="relative z-10 max-w-4xl mx-auto px-5">
+      <div class="text-center mb-16">
+        <h2 class="reveal text-3xl md:text-4xl font-black tracking-tighter mb-4">
+          <span class="gradient-text">OpenClaw</span> 生态
+        </h2>
+        <p class="reveal text-gray-500 dark:text-gray-400">一套完整的 AI Agent 基础设施</p>
+      </div>
+
+      <div class="space-y-4">
+        <a href="https://github.com/openclaw/openclaw" target="_blank" rel="noopener"
+           class="reveal block rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 no-underline text-inherit transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-500/30 group">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-base mb-1 group-hover:text-indigo-500 transition-colors">OpenClaw</h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">AI Agent 框架，支持多模型协作、工具调用、记忆管理、MCP 协议</p>
+            </div>
+            <svg class="w-5 h-5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-500 transition-all group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+          </div>
+        </a>
+        <a href="https://github.com/qingchencloud/clawapp" target="_blank" rel="noopener"
+           class="reveal block rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 no-underline text-inherit transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-500/30 group">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-base mb-1 group-hover:text-indigo-500 transition-colors">ClawApp</h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">跨平台移动聊天客户端，H5 + 代理服务器架构，支持离线和流式传输</p>
+            </div>
+            <svg class="w-5 h-5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-500 transition-all group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+          </div>
+        </a>
+        <a href="https://github.com/qingchencloud/cftunnel" target="_blank" rel="noopener"
+           class="reveal block rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 no-underline text-inherit transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-500/30 group">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-base mb-1 group-hover:text-indigo-500 transition-colors">cftunnel</h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">全协议内网穿透工具，Cloud 模式免费 HTTP/WS + Relay 模式自建中继</p>
+            </div>
+            <svg class="w-5 h-5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-500 transition-all group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+          </div>
+        </a>
+        <a href="https://github.com/qingchencloud/clawpanel" target="_blank" rel="noopener"
+           class="reveal block rounded-2xl border border-gray-200 dark:border-white/[0.06] bg-white/80 dark:bg-white/[0.02] backdrop-blur-sm p-6 no-underline text-inherit transition-all duration-300 hover:-translate-y-0.5 hover:border-indigo-500/30 group">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-base mb-1 group-hover:text-indigo-500 transition-colors">ClawPanel</h3>
+              <p class="text-sm text-gray-500 dark:text-gray-400">OpenClaw 可视化管理面板，Tauri v2 桌面应用（就是你正在看的这个）</p>
+            </div>
+            <svg class="w-5 h-5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-500 transition-all group-hover:translate-x-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M9 5l7 7-7 7"/></svg>
+          </div>
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ CTA ══════════════ -->
+  <section class="relative py-24 overflow-hidden">
+    <div class="orb" style="width:700px;height:700px;background:rgba(99,102,241,0.08);top:50%;left:50%;transform:translate(-50%,-50%);filter:blur(120px)"></div>
+    <div class="relative z-10 max-w-2xl mx-auto px-5 text-center">
+      <h2 class="reveal text-3xl md:text-4xl font-black tracking-tighter mb-4">
+        准备好了？
+      </h2>
+      <p class="reveal text-gray-500 dark:text-gray-400 mb-8">下载 ClawPanel，开始管理你的 AI Agent</p>
+      <div class="reveal flex flex-col sm:flex-row gap-4 justify-center">
+        <a href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener"
+           class="glow-border rounded-xl px-8 py-3.5 font-semibold text-white bg-indigo-500 hover:bg-indigo-600 transition-colors no-underline flex items-center justify-center gap-2.5">
+          <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>
+          下载 ClawPanel
+        </a>
+        <a href="https://github.com/qingchencloud/clawpanel/issues/new" target="_blank" rel="noopener"
+           class="rounded-xl px-8 py-3.5 font-semibold border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 hover:bg-gray-50 dark:hover:bg-white/10 transition-colors no-underline flex items-center justify-center gap-2.5 text-gray-700 dark:text-gray-200">
+          反馈 Issue
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══════════════ 页脚 ══════════════ -->
+  <footer class="border-t border-gray-200 dark:border-white/[0.06] py-10">
+    <div class="max-w-5xl mx-auto px-5 flex flex-col md:flex-row items-center justify-between gap-4 text-sm text-gray-400 dark:text-gray-500">
+      <div class="flex items-center gap-2">
+        <img src="https://raw.githubusercontent.com/qingchencloud/clawpanel/main/public/images/logo.svg" alt="Logo" class="w-5 h-5 rounded opacity-50">
+        <span>MIT License &copy; 2026 <a href="https://github.com/qingchencloud" class="hover:text-gray-600 dark:hover:text-gray-300 transition no-underline text-gray-400 dark:text-gray-500">qingchencloud</a></span>
+      </div>
+      <div class="flex gap-6">
+        <a href="https://github.com/qingchencloud/clawpanel" class="hover:text-gray-600 dark:hover:text-gray-300 transition no-underline text-gray-400 dark:text-gray-500">GitHub</a>
+        <a href="https://github.com/qingchencloud/clawpanel/issues" class="hover:text-gray-600 dark:hover:text-gray-300 transition no-underline text-gray-400 dark:text-gray-500">Issues</a>
+        <a href="https://github.com/qingchencloud/clawpanel/blob/main/CONTRIBUTING.md" class="hover:text-gray-600 dark:hover:text-gray-300 transition no-underline text-gray-400 dark:text-gray-500">贡献</a>
+        <a href="https://qt.cool/c/OpenClaw" target="_blank" rel="noopener" class="hover:text-gray-600 dark:hover:text-gray-300 transition no-underline text-gray-400 dark:text-gray-500">QQ 群</a>
+      </div>
     </div>
   </footer>
 
+  <!-- ══════════════ JavaScript ══════════════ -->
+  <script>
+    /* ── 主题切换 ── */
+    function toggleTheme() {
+      const html = document.documentElement
+      const isDark = html.classList.contains('dark')
+      html.classList.toggle('dark')
+      localStorage.setItem('clawpanel-theme', isDark ? 'light' : 'dark')
+    }
+    document.getElementById('theme-toggle').addEventListener('click', toggleTheme)
+    document.getElementById('theme-toggle-mobile').addEventListener('click', toggleTheme)
+
+    /* ── 汉堡菜单 ── */
+    const hamburger = document.getElementById('hamburger')
+    const mobileMenu = document.getElementById('mobile-menu')
+    hamburger.addEventListener('click', () => mobileMenu.classList.toggle('open'))
+    document.querySelectorAll('.mobile-link').forEach(link => {
+      link.addEventListener('click', () => mobileMenu.classList.remove('open'))
+    })
+
+    /* ── IntersectionObserver 滚动揭示 ── */
+    const revealObserver = new IntersectionObserver((entries) => {
+      entries.forEach((entry, i) => {
+        if (entry.isIntersecting) {
+          // 错开延迟
+          const delay = entry.target.dataset.delay || 0
+          const siblings = Array.from(entry.target.parentElement.children).filter(c => c.classList.contains('reveal'))
+          const idx = siblings.indexOf(entry.target)
+          const stagger = idx >= 0 ? idx * 80 : 0
+          setTimeout(() => entry.target.classList.add('revealed'), Number(delay) + stagger)
+          revealObserver.unobserve(entry.target)
+        }
+      })
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' })
+    document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el))
+
+    /* ── 数字暴涨动画 ── */
+    const counterObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return
+        const el = entry.target
+        const target = parseInt(el.dataset.target)
+        const suffix = el.dataset.suffix || ''
+        if (target === 0) { el.textContent = '0 ' + suffix; counterObserver.unobserve(el); return }
+        const duration = 1500
+        const start = performance.now()
+        function tick(now) {
+          const elapsed = now - start
+          const progress = Math.min(elapsed / duration, 1)
+          const eased = 1 - Math.pow(1 - progress, 4) // easeOutQuart
+          const current = Math.round(target * eased)
+          el.textContent = current + (suffix ? ' ' + suffix : '')
+          if (progress < 1) requestAnimationFrame(tick)
+        }
+        requestAnimationFrame(tick)
+        counterObserver.unobserve(el)
+      })
+    }, { threshold: 0.5 })
+    document.querySelectorAll('.counter').forEach(el => counterObserver.observe(el))
+
+    /* ── 磁性探照灯 ── */
+    const grid = document.getElementById('feature-grid')
+    if (grid) {
+      grid.addEventListener('mousemove', (e) => {
+        const cards = grid.querySelectorAll('.spotlight-card')
+        cards.forEach(card => {
+          const rect = card.getBoundingClientRect()
+          const x = e.clientX - rect.left
+          const y = e.clientY - rect.top
+          card.style.setProperty('--card-x', x + 'px')
+          card.style.setProperty('--card-y', y + 'px')
+        })
+      })
+    }
+
+    /* ── 导航滚动效果 ── */
+    const nav = document.querySelector('nav')
+    window.addEventListener('scroll', () => {
+      if (window.scrollY > 10) nav.classList.add('shadow-sm')
+      else nav.classList.remove('shadow-sm')
+    }, { passive: true })
+  </script>
 </body>
 </html>
