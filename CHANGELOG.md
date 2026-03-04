@@ -5,6 +5,29 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-03-04
+
+### 新增 (Features)
+
+- **Gateway 认证模式切换** — 支持 Token / 密码双认证模式，卡片式选项可视化配置
+- **GitHub Pages 全面重写** — 零 CDN 依赖（移除 Tailwind/Google Fonts），纯 CSS 实现，页面秒开
+- **社区交流板块** — 新增 QQ 群 / 微信群二维码、Discord / 元宝派 / GitHub Discussions 等社区入口
+- **10 张演示截图** — GitHub Pages 与 README 同步集成功能截图，含交互式灯箱与 hover 特效
+- **高级视觉特效** — 粒子上升动画、旋转彩虹边框、鼠标追光、浮动光球、透视英雄图等纯 CSS/JS 实现
+
+### 修复 (Bug Fixes)
+
+- **origin not allowed 自动修复** — WebSocket 握手阶段的 origin 拒绝错误现在正确触发自动配对修复
+- **防止自动配对死循环** — 限制自动配对最多尝试 1 次，失败后显示连接遮罩而非无限重连
+- **诊断页修复按钮反馈** — 「一键修复配对」按钮增加 loading 状态和日志面板自动滚动
+- **Logo 加载修复** — GitHub Pages 使用本地 logo.png，修复私有仓库无法加载的问题
+- **亮色模式按钮文字** — 修复 glow-border 按钮在亮色模式下文字不可见的问题
+
+### 优化 (Improvements)
+
+- **README 社区板块** — 新增二维码展示 + 6 个社区渠道链接表格
+- **WebSocket 监听器清理** — connectGateway 调用前清理已有事件监听，防止重复绑定
+
 ## [0.2.1] - 2026-03-04
 
 ### 新增 (Features)
