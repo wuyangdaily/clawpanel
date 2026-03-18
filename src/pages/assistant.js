@@ -2570,7 +2570,7 @@ function showSettings() {
                 <span style="font-size:10px;background:var(--primary);color:#fff;padding:1px 6px;border-radius:8px">推荐</span>
               </div>
               <div style="font-size:var(--font-size-xs);color:var(--text-secondary);line-height:1.5;margin-bottom:10px">
-                面板用户免费使用部分模型，付费用户享全系列顶级模型，全部低至 2-3 折。选择模型后一键接入。
+                无需自行申请 API Key，选择模型即可一键接入。基础模型免费体验，高级模型低至官方价 2-3 折。
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <select id="ast-qtcool-model" class="form-input" style="font-size:12px;padding:5px 10px;min-width:140px;flex:1">

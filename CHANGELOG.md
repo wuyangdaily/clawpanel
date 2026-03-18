@@ -5,6 +5,34 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.9.6] - 2026-03-18
+
+### 修复 (Fixes)
+
+- **仪表盘二次加载崩溃** — 切换页面后返回仪表盘不再报 `Cannot read properties of null (reading 'recommended')` (#100)
+- **聊天代码单引号乱码** — 代码块中 `'` 不再显示为 `&#x27;`，修正 Markdown 渲染器的 HTML 转义策略 (#99)
+- **聊天图片路径反斜杠丢失** — Windows 路径 `C:\Users\...` 在图片加载失败提示中不再丢失反斜杠
+- **聊天页折叠侧边栏后不自适应** — 折叠主侧边栏后聊天页面现在正确撑满全宽
+- **Gateway 状态横条延迟** — WebSocket 连接成功后立即刷新 Gateway 状态，不再等待 30 秒轮询周期
+- **版本列表加载失败** — 修复 npm registry 返回 gzip 压缩响应时 `error decoding response body` 错误（reqwest 启用 gzip 解压）
+- **配置保存后 Gateway 需手动启动** — 所有页面（模型/渠道/通信等）保存 openclaw.json 后自动重载 Gateway（防抖 3 秒），不再需要手动点启动按钮
+- **dev.ps1 启动脚本报错** — 修复 PowerShell 解析 emoji 字符时的编码错误
+
+### 新功能 (Features)
+
+- **托管 Agent** — 聊天页新增「⊕ 托管」按钮，可设定任务目标后让 AI 自动循环引导 OpenClaw 执行：
+  - 内置系统提示词，明确调度 Agent 的身份和职责
+  - 可视化滑块设置最大回复次数（5-200 或 ∞ 无限）
+  - 定时自动停止（开关 + 滑块 + 倒计时进度条）
+  - 上下文自动压缩（超过 20 条历史自动压缩为摘要）
+  - OpenClaw 回复包含「完成/停止」时自动停止循环
+  - 单按钮启动/停止切换，运行时输入框自动锁定
+
+### 改进 (Improvements)
+
+- **Toast 通知样式** — 从半透明毛玻璃改为实底+边框+阴影，暗色模式兼容性更好
+- **聊天输入框增大** — 最小高度 44px，最大高度 200px，输入体验更舒适
+
 ## [0.9.5] - 2026-03-17
 
 ### 修复 (Fixes)
