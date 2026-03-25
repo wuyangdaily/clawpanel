@@ -1090,55 +1090,32 @@ pub async fn check_weixin_plugin_status() -> Result<Value, String> {
         _ => false,
     };
 
-    // 兼容性检查：检测插件是否能在当前 OpenClaw 版本下正常加载
+    // 兼容性检查：微信插件要求 OpenClaw >= 2026.3.22，通过版本号判断
     let mut compatible = true;
     let mut compat_error = String::new();
     if installed {
-        // 检查插件引用的 SDK 模块是否存在（channel-config-schema 是 2026.3.14+ 新增的）
-        if let Some(cli_path) = crate::utils::resolve_openclaw_cli_path() {
-            let cli_dir = std::path::Path::new(&cli_path)
-                .parent()
-                .and_then(|p| p.parent())
-                .unwrap_or(std::path::Path::new(""));
-            let sdk_path = cli_dir
-                .join("dist")
-                .join("plugin-sdk")
-                .join("root-alias.cjs")
-                .join("channel-config-schema.js");
-            if !sdk_path.exists() {
-                // 也检查 npm 全局路径
-                let npm_sdk_exists = {
-                    #[cfg(target_os = "windows")]
-                    {
-                        std::env::var("APPDATA")
-                            .ok()
-                            .map(|appdata| {
-                                let base = std::path::PathBuf::from(appdata)
-                                    .join("npm")
-                                    .join("node_modules");
-                                ["openclaw", "@qingchencloud/openclaw-zh"]
-                                    .iter()
-                                    .any(|pkg| {
-                                        base.join(pkg)
-                                            .join("dist")
-                                            .join("plugin-sdk")
-                                            .join("root-alias.cjs")
-                                            .join("channel-config-schema.js")
-                                            .exists()
-                                    })
-                            })
-                            .unwrap_or(false)
-                    }
-                    #[cfg(not(target_os = "windows"))]
-                    {
-                        false
-                    }
-                };
-                if !npm_sdk_exists {
-                    compatible = false;
-                    compat_error = "插件版本与当前 OpenClaw 不兼容（缺少 channel-config-schema 模块），请点击「一键安装插件」重新安装兼容版本".to_string();
-                }
-            }
+        let oc_ver = crate::utils::resolve_openclaw_cli_path()
+            .and_then(|_| {
+                let out = crate::utils::openclaw_command()
+                    .arg("--version")
+                    .output()
+                    .ok()?;
+                let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                raw.split_whitespace()
+                    .find(|w| w.chars().next().map_or(false, |c| c.is_ascii_digit()))
+                    .map(String::from)
+            })
+            .unwrap_or_default();
+        let oc_nums: Vec<u32> = oc_ver
+            .split(|c: char| !c.is_ascii_digit())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        if oc_nums < vec![2026, 3, 22] {
+            compatible = false;
+            compat_error = format!(
+                "插件版本与当前 OpenClaw {} 不兼容（要求 >= 2026.3.22），请先升级 OpenClaw 或在终端执行: npx -y @tencent-weixin/openclaw-weixin-cli@latest install",
+                oc_ver
+            );
         }
     }
 
