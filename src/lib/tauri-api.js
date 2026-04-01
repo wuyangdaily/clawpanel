@@ -3,12 +3,19 @@
  * Tauri 环境用 invoke，Web 模式走 dev-api 后端
  */
 
+import { t } from './i18n.js'
+
 const isTauri = !!window.__TAURI_INTERNALS__
 
 // 仅在 Node.js 后端实现的命令（Tauri Rust 不处理），强制走 webInvoke
 const WEB_ONLY_CMDS = new Set([
   'instance_list', 'instance_add', 'instance_remove', 'instance_set_active',
   'instance_health_check', 'instance_health_all',
+  'docker_info', 'docker_list_containers', 'docker_create_container',
+  'docker_start_container', 'docker_stop_container', 'docker_restart_container',
+  'docker_remove_container', 'docker_pull_image', 'docker_pull_status',
+  'docker_list_images', 'docker_list_nodes', 'docker_add_node',
+  'docker_remove_node', 'docker_cluster_overview',
   'get_deploy_mode',
 ])
 
@@ -76,6 +83,10 @@ function cachedInvoke(cmd, args = {}, ttl = CACHE_TTL) {
 
 // 清除指定命令的缓存（写操作后调用）
 function invalidate(...cmds) {
+  if (!cmds.length) {
+    _cache.clear()
+    return
+  }
   for (const [k] of _cache) {
     if (cmds.some(c => k.startsWith(c))) _cache.delete(k)
   }
@@ -110,12 +121,12 @@ async function webInvoke(cmd, args) {
   if (resp.status === 401) {
     // Tauri 模式下不触发登录浮层（Tauri 有自己的认证流程）
     if (!isTauri && window.__clawpanel_show_login) window.__clawpanel_show_login()
-    throw new Error('需要登录')
+    throw new Error(t('common.loginRequired'))
   }
   // 检测后端是否可用：如果返回的是 HTML（非 JSON），说明后端未运行
   const ct = (resp.headers.get('content-type') || '').toLowerCase()
   if (ct.includes('text/html') || ct.includes('text/plain')) {
-    throw new Error('后端服务未运行，该功能需要 Web 部署模式')
+    throw new Error(t('common.backendWebModeRequired'))
   }
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
@@ -195,10 +206,15 @@ export const api = {
 
   // Agent 管理
   listAgents: () => cachedInvoke('list_agents'),
+  getAgentDetail: (id) => cachedInvoke('get_agent_detail', { id }, 5000),
+  listAgentFiles: (id) => cachedInvoke('list_agent_files', { id }, 5000),
+  readAgentFile: (id, name) => invoke('read_agent_file', { id, name }),
+  writeAgentFile: (id, name, content) => { invalidate('list_agent_files', 'read_agent_file'); return invoke('write_agent_file', { id, name, content }) },
+  updateAgentConfig: (id, config) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_config', { id, config }) },
   addAgent: (name, model, workspace) => { invalidate('list_agents'); return invoke('add_agent', { name, model, workspace: workspace || null }) },
-  deleteAgent: (id) => { invalidate('list_agents'); return invoke('delete_agent', { id }) },
-  updateAgentIdentity: (id, name, emoji) => { invalidate('list_agents'); return invoke('update_agent_identity', { id, name, emoji }) },
-  updateAgentModel: (id, model) => { invalidate('list_agents'); return invoke('update_agent_model', { id, model }) },
+  deleteAgent: (id) => { invalidate('list_agents', 'get_agent_detail'); return invoke('delete_agent', { id }) },
+  updateAgentIdentity: (id, name, emoji) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_identity', { id, name, emoji }) },
+  updateAgentModel: (id, model) => { invalidate('list_agents', 'get_agent_detail'); return invoke('update_agent_model', { id, model }) },
   backupAgent: (id) => invoke('backup_agent', { id }),
 
   // 日志（短缓存）
@@ -234,14 +250,14 @@ export const api = {
   getAgentBindings: (agentId) => invoke('get_agent_bindings', { agentId }),
   listAllBindings: () => invoke('list_all_bindings'),
   saveAgentBinding: (agentId, channel, accountId, bindingConfig) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('save_agent_binding', { agentId, channel, accountId: accountId || null, bindingConfig: bindingConfig || {} }) },
-  deleteAgentBinding: (agentId, channel, accountId) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('delete_agent_binding', { agentId, channel, accountId: accountId || null }) },
+  deleteAgentBinding: (agentId, channel, accountId, bindingConfig) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('delete_agent_binding', { agentId, channel, accountId: accountId || null, bindingConfig: bindingConfig || null }) },
   deleteAgentAllBindings: (agentId) => { invalidate('read_openclaw_config', 'list_configured_platforms'); return invoke('delete_agent_all_bindings', { agentId }) },
 
   // 面板配置 (clawpanel.json)
   getOpenclawDir: () => invoke('get_openclaw_dir'),
   relaunchApp: () => invoke('relaunch_app'),
   readPanelConfig: () => invoke('read_panel_config'),
-  writePanelConfig: (config) => invoke('write_panel_config', { config }),
+  writePanelConfig: (config) => { invalidate(); return invoke('write_panel_config', { config }).then(r => { invoke('invalidate_path_cache').catch(() => {}); return r }) },
   testProxy: (url) => invoke('test_proxy', { url: url || null }),
 
   // 安装/部署
@@ -249,7 +265,9 @@ export const api = {
   initOpenclawConfig: () => { invalidate('check_installation'); return invoke('init_openclaw_config') },
   checkNode: () => cachedInvoke('check_node', {}, 60000),
   checkNodeAtPath: (nodeDir) => invoke('check_node_at_path', { nodeDir }),
+  checkOpenclawAtPath: (cliPath) => invoke('check_openclaw_at_path', { cliPath }),
   scanNodePaths: () => invoke('scan_node_paths'),
+  scanOpenclawPaths: () => invoke('scan_openclaw_paths'),
   saveCustomNodePath: (nodeDir) => invoke('save_custom_node_path', { nodeDir }).then(r => { invalidate('check_node', 'get_services_status'); invoke('invalidate_path_cache').catch(() => {}); return r }),
   invalidatePathCache: () => invoke('invalidate_path_cache'),
   checkGit: () => cachedInvoke('check_git', {}, 60000),
@@ -306,6 +324,22 @@ export const api = {
   instanceSetActive: (id) => { invalidate('instance_list'); _cache.clear(); return invoke('instance_set_active', { id }) },
   instanceHealthCheck: (id) => invoke('instance_health_check', { id }),
   instanceHealthAll: () => invoke('instance_health_all'),
+
+  // Docker 管理（当前由 Web/dev-api 提供）
+  dockerInfo: (nodeId) => invoke('docker_info', { nodeId: nodeId || null }),
+  dockerListContainers: (nodeId, all = true) => invoke('docker_list_containers', { nodeId: nodeId || null, all }),
+  dockerCreateContainer: (payload) => invoke('docker_create_container', payload || {}),
+  dockerStartContainer: (nodeId, containerId) => invoke('docker_start_container', { nodeId: nodeId || null, containerId }),
+  dockerStopContainer: (nodeId, containerId) => invoke('docker_stop_container', { nodeId: nodeId || null, containerId }),
+  dockerRestartContainer: (nodeId, containerId) => invoke('docker_restart_container', { nodeId: nodeId || null, containerId }),
+  dockerRemoveContainer: (nodeId, containerId, force = false) => invoke('docker_remove_container', { nodeId: nodeId || null, containerId, force }),
+  dockerPullImage: (payload) => invoke('docker_pull_image', payload || {}),
+  dockerPullStatus: (requestId) => invoke('docker_pull_status', { requestId }),
+  dockerListImages: (nodeId) => invoke('docker_list_images', { nodeId: nodeId || null }),
+  dockerListNodes: () => invoke('docker_list_nodes', {}),
+  dockerAddNode: (name, endpoint) => invoke('docker_add_node', { name, endpoint }),
+  dockerRemoveNode: (nodeId) => invoke('docker_remove_node', { nodeId }),
+  dockerClusterOverview: () => invoke('docker_cluster_overview', {}),
 
 
   // 前端热更新

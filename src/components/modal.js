@@ -2,6 +2,8 @@
  * Modal 弹窗组件
  */
 
+import { t } from '../lib/i18n.js'
+
 // 转义 HTML 属性值，防止双引号等字符破坏 HTML 结构
 function escapeAttr(str) {
   if (!str) return ''
@@ -24,11 +26,11 @@ export function showConfirm(message) {
     overlay.className = 'modal-overlay'
     overlay.innerHTML = `
       <div class="modal" style="max-width:400px">
-        <div class="modal-title">确认操作</div>
+        <div class="modal-title">${t('common.confirmAction')}</div>
         <div style="font-size:var(--font-size-sm);color:var(--text-secondary);white-space:pre-wrap;line-height:1.6">${escapeAttr(message)}</div>
         <div class="modal-actions">
-          <button class="btn btn-secondary btn-sm" data-action="cancel">取消</button>
-          <button class="btn btn-danger btn-sm" data-action="confirm">确定</button>
+          <button class="btn btn-secondary btn-sm" data-action="cancel">${t('common.cancel')}</button>
+          <button class="btn btn-danger btn-sm" data-action="confirm">${t('common.confirm')}</button>
         </div>
       </div>
     `
@@ -91,8 +93,8 @@ export function showModal({ title, fields, onConfirm }) {
       <div class="modal-title">${title}</div>
       ${fieldHtml}
       <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" data-action="cancel">取消</button>
-        <button class="btn btn-primary btn-sm" data-action="confirm">确定</button>
+        <button class="btn btn-secondary btn-sm" data-action="cancel">${t('common.cancel')}</button>
+        <button class="btn btn-primary btn-sm" data-action="confirm">${t('common.confirm')}</button>
       </div>
     </div>
   `
@@ -156,7 +158,7 @@ export function showContentModal({ title, content, buttons = [], width = 480 }) 
       <div class="modal-title">${title}</div>
       <div class="modal-content-body">${content}</div>
       <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" data-action="cancel">取消</button>
+        <button class="btn btn-secondary btn-sm" data-action="cancel">${t('common.cancel')}</button>
         ${btnsHtml}
       </div>
     </div>
@@ -190,14 +192,14 @@ export function showUpgradeModal(title) {
   overlay.className = 'modal-overlay'
   overlay.innerHTML = `
     <div class="modal" style="max-width:520px">
-      <div class="modal-title">${title || '升级 OpenClaw'}</div>
+      <div class="modal-title">${title || t('common.upgradeOpenClaw')}</div>
       <div class="upgrade-progress-wrap">
         <div class="upgrade-progress-bar"><div class="upgrade-progress-fill" style="width:0%"></div></div>
-        <div class="upgrade-progress-text">准备中...</div>
+        <div class="upgrade-progress-text">${t('common.preparing')}</div>
       </div>
       <div class="upgrade-log-box"></div>
       <div class="modal-actions">
-        <button class="btn btn-secondary btn-sm" data-action="close">关闭</button>
+        <button class="btn btn-secondary btn-sm" data-action="close">${t('common.close')}</button>
       </div>
     </div>
   `
@@ -237,7 +239,7 @@ export function showUpgradeModal(title) {
     _taskBar.className = 'upgrade-task-bar'
     _taskBar.innerHTML = `
       <span class="upgrade-task-bar-text">${text.textContent}</span>
-      <button class="btn btn-sm upgrade-task-bar-open">查看详情</button>
+      <button class="btn btn-sm upgrade-task-bar-open">${t('common.viewDetails')}</button>
       <button class="btn btn-sm btn-ghost upgrade-task-bar-dismiss">×</button>
     `
     _taskBar.querySelector('.upgrade-task-bar-open').onclick = reopenModal
@@ -276,16 +278,16 @@ export function showUpgradeModal(title) {
     setProgress(pct) {
       fill.style.width = pct + '%'
       let statusText
-      if (pct >= 100) statusText = '完成'
-      else if (pct >= 75) statusText = '正在安装...'
-      else if (pct >= 30) statusText = '正在下载依赖...'
-      else statusText = '准备中...'
+      if (pct >= 100) statusText = t('common.completed')
+      else if (pct >= 75) statusText = t('common.installingProgress')
+      else if (pct >= 30) statusText = t('common.downloadingDependencies')
+      else statusText = t('common.preparing')
       text.textContent = statusText
       updateTaskBar(statusText)
     },
     setDone(msg) {
       _finished = true
-      text.textContent = msg || '升级完成'
+      text.textContent = msg || t('common.upgradeCompleted')
       fill.style.width = '100%'
       fill.classList.add('done')
       if (_taskBar) { _taskBar.remove(); _taskBar = null }
@@ -293,11 +295,11 @@ export function showUpgradeModal(title) {
     },
     setError(msg) {
       _finished = true
-      text.textContent = msg || '升级失败'
+      text.textContent = msg || t('common.upgradeFailed')
       fill.classList.add('error')
       if (_taskBar) {
         const span = _taskBar.querySelector('.upgrade-task-bar-text')
-        if (span) { span.textContent = msg || '升级失败'; span.style.color = 'var(--error)' }
+        if (span) { span.textContent = msg || t('common.upgradeFailed'); span.style.color = 'var(--error)' }
       }
       closeBtn.focus()
     },

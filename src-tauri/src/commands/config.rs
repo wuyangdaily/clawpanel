@@ -380,8 +380,7 @@ fn pre_install_cleanup() {
     // 2. 清理 npm 全局 bin 目录下的 openclaw 残留文件（Windows EEXIST 根因）
     #[cfg(target_os = "windows")]
     {
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let npm_bin = std::path::Path::new(&appdata).join("npm");
+        if let Some(npm_bin) = npm_global_bin_dir() {
             for name in &["openclaw", "openclaw.cmd", "openclaw.ps1"] {
                 let p = npm_bin.join(name);
                 if p.exists() {
@@ -418,7 +417,7 @@ pub fn read_openclaw_config() -> Result<Value, String> {
             v
         }
         Err(e) => {
-            // JSON 解析失败，尝试自动修复常见错误
+            // JSON 解析失败，尝试自动修复
             let fixed_content = fix_common_json_errors(&content);
             if let Ok(v) = serde_json::from_str(&fixed_content) {
                 eprintln!("自动修复了配置文件的 JSON 语法错误");
@@ -706,49 +705,47 @@ pub fn validate_openclaw_config() -> Result<Value, String> {
 
     // 尝试解析 JSON
     let config: Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
+        Ok(v) => {
+            // BOM 被剥离过，静默写回干净文件
+            if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
+                let _ = fs::write(&path, &content);
+            }
+            v
+        }
         Err(e) => {
             // JSON 解析失败，尝试自动修复
             let fixed_content = fix_common_json_errors(&content);
-            match serde_json::from_str::<Value>(&fixed_content) {
-                Ok(_v) => {
-                    return Ok(json!({
-                        "config_valid": false,
-                        "json_error": format!("JSON 有语法错误，但已自动修复 (行: {}, 列: {})", e.line(), e.column()),
-                        "auto_fixed": true,
-                        "warnings": [
-                            "配置文件存在 JSON 语法错误，已自动修复",
-                            "建议：检查配置文件是否有尾随逗号或注释"
-                        ]
-                    }));
-                }
-                Err(_) => {
-                    // 自动修复失败，检查备份
-                    let bak = super::openclaw_dir().join("openclaw.json.bak");
-                    if bak.exists() {
-                        if let Ok(bak_content) = fs::read_to_string(&bak) {
-                            if serde_json::from_str::<Value>(&bak_content).is_ok() {
-                                return Ok(json!({
-                                    "config_valid": false,
-                                    "json_error": format!("JSON 解析失败 (行: {}, 列: {}), 建议从备份恢复", e.line(), e.column()),
-                                    "backup_exists": true,
-                                    "warnings": [
-                                        "配置文件损坏，建议使用备份恢复",
-                                        "备份文件：openclaw.json.bak"
-                                    ]
-                                }));
-                            }
+            if let Ok(v) = serde_json::from_str(&fixed_content) {
+                eprintln!("自动修复了配置文件的 JSON 语法错误");
+                // 写回修复后的配置
+                let _ = fs::write(&path, &fixed_content);
+                v
+            } else {
+                // 自动修复失败，尝试从备份恢复
+                let bak = super::openclaw_dir().join("openclaw.json.bak");
+                if bak.exists() {
+                    if let Ok(bak_content) = fs::read_to_string(&bak) {
+                        if serde_json::from_str::<Value>(&bak_content).is_ok() {
+                            return Ok(json!({
+                                "config_valid": false,
+                                "json_error": format!("JSON 解析失败 (行: {}, 列: {}), 建议从备份恢复", e.line(), e.column()),
+                                "backup_exists": true,
+                                "warnings": [
+                                    "配置文件损坏，建议使用备份恢复",
+                                    "备份文件：openclaw.json.bak"
+                                ]
+                            }));
                         }
                     }
-                    return Ok(json!({
-                        "config_valid": false,
-                        "json_error": format!("JSON 解析失败 (行: {}, 列: {}): {}", e.line(), e.column(), e),
-                        "warnings": [
-                            "配置文件严重损坏且无有效备份",
-                            "建议：手动检查或重新创建配置文件"
-                        ]
-                    }));
                 }
+                return Ok(json!({
+                    "config_valid": false,
+                    "json_error": format!("JSON 解析失败 (行: {}, 列: {}): {}", e.line(), e.column(), e),
+                    "warnings": [
+                        "配置文件严重损坏且无有效备份",
+                        "建议：手动检查或重新创建配置文件"
+                    ]
+                }));
             }
         }
     };
@@ -872,7 +869,7 @@ pub fn validate_openclaw_config() -> Result<Value, String> {
 }
 
 /// 将 openclaw.json 的 models.providers 完整同步到每个 agent 的 models.json
-/// 包括：同步 baseUrl/apiKey/api、删除已移除的 provider、删除已移除的 model、
+/// 包括：同步 baseUrl/apiKey/api + 清理已删除的 models
 /// 确保 Gateway 运行时不会引用 openclaw.json 中已不存在的模型
 fn sync_providers_to_agent_models(config: &Value) {
     let src_providers = config
@@ -1236,8 +1233,7 @@ async fn get_local_version() -> Option<String> {
             }
         }
 
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let npm_bin = PathBuf::from(&appdata).join("npm");
+        if let Some(npm_bin) = npm_global_bin_dir() {
             let shim_path = npm_bin.join("openclaw.cmd");
             // 仅当 npm 全局 CLI shim 存在时才读取版本
             if !shim_path.exists() {
@@ -1282,32 +1278,8 @@ async fn get_local_version() -> Option<String> {
         }
         // 2. standalone 目录
         for sa_dir in all_standalone_dirs() {
-            if !sa_dir.join("openclaw").exists() {
-                continue;
-            }
-            let version_file = sa_dir.join("VERSION");
-            if let Ok(content) = fs::read_to_string(&version_file) {
-                for line in content.lines() {
-                    if let Some(ver) = line.strip_prefix("openclaw_version=") {
-                        let ver = ver.trim();
-                        if !ver.is_empty() {
-                            return Some(ver.to_string());
-                        }
-                    }
-                }
-            }
-            let sa_pkg = sa_dir
-                .join("node_modules")
-                .join("@qingchencloud")
-                .join("openclaw-zh")
-                .join("package.json");
-            if let Ok(content) = fs::read_to_string(&sa_pkg) {
-                if let Some(ver) = serde_json::from_str::<Value>(&content)
-                    .ok()
-                    .and_then(|v| v.get("version")?.as_str().map(String::from))
-                {
-                    return Some(ver);
-                }
+            if sa_dir.join("openclaw").exists() || sa_dir.join("VERSION").exists() {
+                return Some("unknown".to_string());
             }
         }
         // 3. symlink -> package.json
@@ -1453,8 +1425,8 @@ fn detect_installed_source() -> String {
             }
         }
         // 无活跃 CLI 时的兜底：仅检查 npm 全局目录中实际存在的 shim
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            let shim = PathBuf::from(&appdata).join("npm").join("openclaw.cmd");
+        if let Some(npm_bin) = npm_global_bin_dir() {
+            let shim = npm_bin.join("openclaw.cmd");
             if let Some(s) = detect_source_from_cmd_shim(&shim) {
                 return s;
             }
@@ -1575,6 +1547,31 @@ pub async fn get_version_info() -> Result<VersionInfo, String> {
     })
 }
 
+fn scan_cli_identity(cli_path: &std::path::Path) -> String {
+    let mut identity_path = cli_path.to_path_buf();
+
+    #[cfg(target_os = "windows")]
+    {
+        let file_name = cli_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if matches!(file_name.as_str(), "openclaw" | "openclaw.exe" | "openclaw.ps1") {
+            let cmd_path = cli_path.with_file_name("openclaw.cmd");
+            if cmd_path.exists() {
+                identity_path = cmd_path;
+            }
+        }
+    }
+
+    identity_path
+        .canonicalize()
+        .unwrap_or(identity_path)
+        .to_string_lossy()
+        .to_lowercase()
+}
+
 /// 扫描系统中所有可检测到的 OpenClaw 安装
 fn scan_all_installations(
     active_path: &Option<String>,
@@ -1582,33 +1579,28 @@ fn scan_all_installations(
     use crate::models::types::OpenClawInstallation;
     let mut results: Vec<OpenClawInstallation> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let active_identity = active_path
+        .as_ref()
+        .map(|path| scan_cli_identity(std::path::Path::new(path)));
 
     let mut try_add = |path: std::path::PathBuf| {
         if !path.exists() {
             return;
         }
-        let canonical = path
-            .canonicalize()
-            .unwrap_or_else(|_| path.clone())
-            .to_string_lossy()
-            .to_string();
-        if seen.contains(&canonical) {
+        if crate::utils::is_rejected_cli_path(&path.to_string_lossy()) {
             return;
         }
-        seen.insert(canonical.clone());
+        let identity = scan_cli_identity(&path);
+        if seen.contains(&identity) {
+            return;
+        }
+        seen.insert(identity.clone());
         let path_str = path.to_string_lossy().to_string();
         let source = crate::utils::classify_cli_source(&path_str);
         let version = read_version_from_installation(&path);
-        let is_active = active_path
+        let is_active = active_identity
             .as_ref()
-            .map(|a| {
-                let a_canon = std::path::Path::new(a)
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::path::PathBuf::from(a))
-                    .to_string_lossy()
-                    .to_string();
-                a_canon == canonical
-            })
+            .map(|active| active == &identity)
             .unwrap_or(false);
         results.push(OpenClawInstallation {
             path: path_str,
@@ -1621,12 +1613,22 @@ fn scan_all_installations(
     // standalone 安装目录
     for sa_dir in all_standalone_dirs() {
         #[cfg(target_os = "windows")]
-        try_add(sa_dir.join("openclaw.cmd"));
+        {
+            try_add(sa_dir.join("openclaw.cmd"));
+            try_add(sa_dir.join("openclaw.exe"));
+        }
         #[cfg(not(target_os = "windows"))]
-        try_add(sa_dir.join("openclaw"));
+        {
+            try_add(sa_dir.join("openclaw"));
+        }
     }
 
-    // npm 全局目录
+    for configured in super::openclaw_search_paths() {
+        if let Some(resolved) = resolve_openclaw_cli_input_path(&configured) {
+            try_add(resolved);
+        }
+    }
+
     #[cfg(target_os = "windows")]
     {
         if let Ok(appdata) = std::env::var("APPDATA") {
@@ -1635,10 +1637,106 @@ fn scan_all_installations(
                     .join("npm")
                     .join("openclaw.cmd"),
             );
+            try_add(
+                std::path::PathBuf::from(&appdata)
+                    .join("npm")
+                    .join("openclaw"),
+            );
+        }
+        if let Some(prefix) = super::windows_npm_global_prefix() {
+            let prefix_path = std::path::PathBuf::from(prefix);
+            try_add(prefix_path.join("openclaw.cmd"));
+            try_add(prefix_path.join("openclaw.exe"));
+            try_add(prefix_path.join("openclaw"));
+        }
+        if let Ok(localappdata) = std::env::var("LOCALAPPDATA") {
+            try_add(
+                std::path::PathBuf::from(&localappdata)
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("openclaw.cmd"),
+            );
+        }
+        if let Ok(program_files) = std::env::var("ProgramFiles") {
+            try_add(
+                std::path::PathBuf::from(&program_files)
+                    .join("nodejs")
+                    .join("openclaw.cmd"),
+            );
+            try_add(
+                std::path::PathBuf::from(&program_files)
+                    .join("OpenClaw")
+                    .join("openclaw.cmd"),
+            );
+        }
+        if let Ok(program_files_x86) = std::env::var("ProgramFiles(x86)") {
+            try_add(
+                std::path::PathBuf::from(&program_files_x86)
+                    .join("nodejs")
+                    .join("openclaw.cmd"),
+            );
+        }
+        if let Ok(profile) = std::env::var("USERPROFILE") {
+            try_add(
+                std::path::PathBuf::from(&profile)
+                    .join(".openclaw-bin")
+                    .join("openclaw.cmd"),
+            );
+        }
+        for drive in ["C", "D", "E", "F", "G"] {
+            try_add(std::path::PathBuf::from(format!(
+                r"{}:\OpenClaw\openclaw.cmd",
+                drive
+            )));
+            try_add(std::path::PathBuf::from(format!(
+                r"{}:\AI\OpenClaw\openclaw.cmd",
+                drive
+            )));
+        }
+        let mut where_cmd = Command::new("where");
+        where_cmd.arg("openclaw");
+        where_cmd.creation_flags(0x08000000);
+        if let Ok(output) = where_cmd.output() {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    try_add(std::path::PathBuf::from(trimmed));
+                }
+            }
         }
     }
 
-    // PATH 中找到的所有 openclaw
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(home) = dirs::home_dir() {
+            try_add(home.join(".npm-global").join("bin").join("openclaw"));
+            try_add(home.join(".local").join("bin").join("openclaw"));
+            try_add(home.join(".nvm").join("current").join("bin").join("openclaw"));
+            try_add(home.join(".volta").join("bin").join("openclaw"));
+            try_add(home.join(".fnm").join("current").join("bin").join("openclaw"));
+            try_add(home.join("bin").join("openclaw"));
+        }
+        try_add(std::path::PathBuf::from("/opt/openclaw/openclaw"));
+        try_add(std::path::PathBuf::from("/opt/homebrew/bin/openclaw"));
+        try_add(std::path::PathBuf::from("/usr/local/bin/openclaw"));
+        try_add(std::path::PathBuf::from("/usr/bin/openclaw"));
+        try_add(std::path::PathBuf::from("/snap/bin/openclaw"));
+        if let Ok(output) = Command::new("which").args(["-a", "openclaw"]).output() {
+            if output.status.success() {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    try_add(std::path::PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+
     let enhanced = super::enhanced_path();
     #[cfg(target_os = "windows")]
     let sep = ';';
@@ -1660,7 +1758,117 @@ fn scan_all_installations(
         }
     }
 
+    results.sort_by(|a, b| {
+        b.active
+            .cmp(&a.active)
+            .then_with(|| a.source.cmp(&b.source))
+            .then_with(|| a.path.cmp(&b.path))
+    });
+
     results
+}
+
+pub(crate) fn resolve_openclaw_cli_input_path(
+    cli_path: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    if cli_path.as_os_str().is_empty() {
+        return None;
+    }
+    let input = cli_path.to_path_buf();
+    let mut candidates: Vec<std::path::PathBuf> = Vec::new();
+
+    if input.is_dir() {
+        #[cfg(target_os = "windows")]
+        {
+            candidates.push(input.join("openclaw.cmd"));
+            candidates.push(input.join("openclaw.exe"));
+            candidates.push(input.join("openclaw"));
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            candidates.push(input.join("openclaw"));
+        }
+    } else {
+        candidates.push(input);
+    }
+
+    candidates.into_iter().find(|candidate| {
+        candidate.exists() && !crate::utils::is_rejected_cli_path(&candidate.to_string_lossy())
+    })
+}
+
+pub(crate) fn resolve_openclaw_cli_input(cli_path: &str) -> Option<std::path::PathBuf> {
+    let raw = cli_path.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    resolve_openclaw_cli_input_path(std::path::Path::new(raw))
+}
+
+#[tauri::command]
+pub fn scan_openclaw_paths() -> Result<Vec<crate::models::types::OpenClawInstallation>, String> {
+    super::refresh_enhanced_path();
+    crate::commands::service::invalidate_cli_detection_cache();
+    let active_path = crate::utils::resolve_openclaw_cli_path();
+    Ok(scan_all_installations(&active_path))
+}
+
+#[tauri::command]
+pub fn check_openclaw_at_path(cli_path: String) -> Result<Value, String> {
+    let mut result = serde_json::Map::new();
+    if let Some(resolved) = resolve_openclaw_cli_input(&cli_path) {
+        let path_str = resolved.to_string_lossy().to_string();
+        result.insert("installed".into(), Value::Bool(true));
+        result.insert("path".into(), Value::String(path_str.clone()));
+        result.insert(
+            "source".into(),
+            Value::String(crate::utils::classify_cli_source(&path_str)),
+        );
+        if let Some(version) = read_version_from_installation(&resolved) {
+            result.insert("version".into(), Value::String(version));
+        } else {
+            result.insert("version".into(), Value::Null);
+        }
+    } else {
+        result.insert("installed".into(), Value::Bool(false));
+        result.insert("path".into(), Value::Null);
+        result.insert("source".into(), Value::Null);
+        result.insert("version".into(), Value::Null);
+    }
+    Ok(Value::Object(result))
+}
+
+fn find_git_path() -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut cmd = Command::new("where");
+        cmd.arg("git");
+        cmd.creation_flags(0x08000000);
+        if let Ok(output) = cmd.output() {
+            if output.status.success() {
+                if let Some(first_line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                    let path = first_line.trim().to_string();
+                    if !path.is_empty() && std::path::Path::new(&path).exists() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(output) = Command::new("which").arg("git").output() {
+            if output.status.success() {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && std::path::Path::new(&path).exists() {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// 从安装路径附近读取版本信息
@@ -1864,9 +2072,13 @@ fn r2_platform_key() -> &'static str {
 fn npm_global_modules_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|a| PathBuf::from(a).join("npm").join("node_modules"))
+        super::windows_npm_global_prefix()
+            .map(|prefix| PathBuf::from(prefix).join("node_modules"))
+            .or_else(|| {
+                std::env::var("APPDATA")
+                    .ok()
+                    .map(|a| PathBuf::from(a).join("npm").join("node_modules"))
+            })
     }
     #[cfg(target_os = "macos")]
     {
@@ -1902,9 +2114,9 @@ fn npm_global_modules_dir() -> Option<PathBuf> {
 fn npm_global_bin_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var("APPDATA")
-            .ok()
-            .map(|a| PathBuf::from(a).join("npm"))
+        super::windows_npm_global_prefix()
+            .map(PathBuf::from)
+            .or_else(|| std::env::var("APPDATA").ok().map(|a| PathBuf::from(a).join("npm")))
     }
     #[cfg(target_os = "macos")]
     {
@@ -3334,6 +3546,9 @@ pub fn scan_node_paths() -> Result<Value, String> {
         if !appdata.is_empty() {
             candidates.push((format!(r"{}\npm", appdata), "NPM_GLOBAL".to_string()));
         }
+        if let Some(prefix) = super::windows_npm_global_prefix() {
+            candidates.push((prefix, "NPM_GLOBAL".to_string()));
+        }
 
         // 系统默认
         candidates.push((format!(r"{}\nodejs", pf), "SYSTEM".to_string()));
@@ -3467,7 +3682,10 @@ fn is_nvm_active_version(nvm_dir: &str, version_dir: &std::path::Path) -> bool {
 /// 保存用户自定义的 Node.js 路径到 ~/.openclaw/clawpanel.json
 #[tauri::command]
 pub fn save_custom_node_path(node_dir: String) -> Result<(), String> {
-    let config_path = super::openclaw_dir().join("clawpanel.json");
+    let config_path = super::panel_config_path();
+    if let Some(parent) = config_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     let mut config: serde_json::Map<String, Value> = if config_path.exists() {
         let content =
             std::fs::read_to_string(&config_path).map_err(|e| format!("读取配置失败: {e}"))?;
@@ -3496,7 +3714,10 @@ pub fn write_env_file(path: String, config: String) -> Result<(), String> {
     // 安全限制：只允许写入 ~/.openclaw/ 目录下的文件
     let openclaw_base = super::openclaw_dir();
     if !expanded.starts_with(&openclaw_base) {
-        return Err("只允许写入 ~/.openclaw/ 目录下的文件".to_string());
+        return Err(format!(
+            "只允许写入 {} 目录下的文件",
+            openclaw_base.display()
+        ));
     }
 
     if let Some(parent) = expanded.parent() {
@@ -4290,7 +4511,7 @@ pub fn get_openclaw_dir() -> Result<Value, String> {
     let resolved = super::openclaw_dir();
     let is_custom = super::read_panel_config_value()
         .and_then(|v| v.get("openclawDir")?.as_str().map(String::from))
-        .map(|s| !s.is_empty())
+        .map(|s| !s.trim().is_empty())
         .unwrap_or(false);
     let config_exists = resolved.join("openclaw.json").exists();
     Ok(json!({
@@ -4380,6 +4601,7 @@ pub fn set_npm_registry(registry: String) -> Result<(), String> {
 #[tauri::command]
 pub fn check_git() -> Result<Value, String> {
     let mut result = serde_json::Map::new();
+    let git_path = find_git_path();
     let mut cmd = Command::new("git");
     cmd.arg("--version");
     #[cfg(target_os = "windows")]
@@ -4389,10 +4611,17 @@ pub fn check_git() -> Result<Value, String> {
             let ver = String::from_utf8_lossy(&o.stdout).trim().to_string();
             result.insert("installed".into(), Value::Bool(true));
             result.insert("version".into(), Value::String(ver));
+            result.insert(
+                "path".into(),
+                git_path
+                    .map(Value::String)
+                    .unwrap_or(Value::Null),
+            );
         }
         _ => {
             result.insert("installed".into(), Value::Bool(false));
             result.insert("version".into(), Value::Null);
+            result.insert("path".into(), Value::Null);
         }
     }
     Ok(Value::Object(result))

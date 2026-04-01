@@ -1,9 +1,21 @@
 /// Agent 管理命令 — 列表/改名直接读写 openclaw.json；创建/删除走 CLI（需要创建 workspace 等文件）
 use crate::utils::openclaw_command_async;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
+
+const AGENT_FILE_ALLOWLIST: &[&str] = &[
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+    "HEARTBEAT.md",
+    "BOOTSTRAP.md",
+    "MEMORY.md",
+];
 
 /// Workspace 状态信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +220,200 @@ pub async fn list_agents() -> Result<Value, String> {
         .collect();
 
     Ok(Value::Array(enriched))
+}
+
+#[tauri::command]
+pub async fn get_agent_detail(id: String) -> Result<Value, String> {
+    let config_path = super::openclaw_dir().join("openclaw.json");
+    let content = fs::read_to_string(&config_path).map_err(|e| format!("读取配置失败: {e}"))?;
+    let config: Value = serde_json::from_str(&content).map_err(|e| format!("解析 JSON 失败: {e}"))?;
+
+    let defaults = config
+        .get("agents")
+        .and_then(|a| a.get("defaults"))
+        .cloned()
+        .unwrap_or(Value::Null);
+    let bindings = config
+        .get("bindings")
+        .and_then(|b| b.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut agent = config
+        .get("agents")
+        .and_then(|a| a.get("list"))
+        .and_then(|l| l.as_array())
+        .and_then(|list| {
+            list.iter()
+                .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id.as_str()))
+                .cloned()
+        })
+        .unwrap_or_else(|| json!({ "id": id.clone(), "default": id == "main" }));
+
+    let workspace = agent
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| resolve_agent_workspace(&id, &config));
+
+    let agent_bindings: Vec<Value> = bindings
+        .into_iter()
+        .filter(|b| b.get("agentId").and_then(|v| v.as_str()).unwrap_or("main") == id)
+        .collect();
+
+    let is_default = agent
+        .get("default")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(id == "main");
+
+    agent.as_object_mut().map(|obj| {
+        obj.insert("workspace".to_string(), Value::String(workspace));
+        obj.insert("bindings".to_string(), Value::Array(agent_bindings));
+        obj.insert("isDefault".to_string(), Value::Bool(is_default));
+        obj.insert("defaults".to_string(), defaults);
+    });
+
+    Ok(agent)
+}
+
+#[tauri::command]
+pub async fn list_agent_files(id: String) -> Result<Value, String> {
+    let config = read_openclaw_config_value()?;
+    let agent_dir = resolve_agent_dir(&id, &config);
+    let files: Vec<Value> = AGENT_FILE_ALLOWLIST
+        .iter()
+        .map(|name| {
+            let path = agent_dir.join(name);
+            let meta = fs::metadata(&path).ok();
+            json!({
+                "name": name,
+                "desc": bootstrap_file_desc(name),
+                "exists": path.exists(),
+                "size": meta.as_ref().map(|m| m.len()).unwrap_or(0),
+                "mtime": meta.and_then(|m| m.modified().ok()).and_then(|m| chrono::DateTime::<chrono::Utc>::from(m).to_rfc3339().into()),
+                "path": path.to_string_lossy().to_string(),
+            })
+        })
+        .collect();
+    Ok(Value::Array(files))
+}
+
+#[tauri::command]
+pub async fn read_agent_file(id: String, name: String) -> Result<Value, String> {
+    ensure_allowed_agent_file(&name)?;
+    let config = read_openclaw_config_value()?;
+    let path = resolve_agent_dir(&id, &config).join(&name);
+    if !path.exists() {
+        return Ok(json!({ "exists": false, "content": "" }));
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取文件失败: {e}"))?;
+    Ok(json!({ "exists": true, "content": content }))
+}
+
+#[tauri::command]
+pub async fn write_agent_file(id: String, name: String, content: String) -> Result<Value, String> {
+    ensure_allowed_agent_file(&name)?;
+    let config = read_openclaw_config_value()?;
+    let dir = resolve_agent_dir(&id, &config);
+    if !dir.exists() {
+        fs::create_dir_all(&dir).map_err(|e| format!("创建目录失败: {e}"))?;
+    }
+    fs::write(dir.join(&name), content).map_err(|e| format!("写入文件失败: {e}"))?;
+    Ok(json!({ "ok": true }))
+}
+
+#[tauri::command]
+pub async fn update_agent_config(
+    app: tauri::AppHandle,
+    id: String,
+    config: Value,
+) -> Result<Value, String> {
+    let path = super::openclaw_dir().join("openclaw.json");
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
+    let mut root: Value = serde_json::from_str(&content).map_err(|e| format!("解析 JSON 失败: {e}"))?;
+
+    if root.get("agents").is_none() {
+        root.as_object_mut()
+            .ok_or("配置格式错误")?
+            .insert("agents".to_string(), json!({}));
+    }
+    if root["agents"].get("list").is_none() {
+        root["agents"]
+            .as_object_mut()
+            .ok_or("agents 格式错误")?
+            .insert("list".to_string(), json!([]));
+    }
+
+    let list = root["agents"]["list"]
+        .as_array_mut()
+        .ok_or("agents.list 格式错误")?;
+
+    let index = list
+        .iter()
+        .position(|agent| agent.get("id").and_then(|v| v.as_str()) == Some(id.as_str()));
+
+    let idx = match index {
+        Some(idx) => idx,
+        None if id == "main" => {
+            list.insert(0, json!({ "id": "main" }));
+            0
+        }
+        None => return Err(format!("Agent「{id}」不存在")),
+    };
+
+    let agent = list[idx].as_object_mut().ok_or("Agent 格式错误")?;
+
+    if let Some(identity) = config.get("identity").and_then(|v| v.as_object()) {
+        let identity_obj = agent.entry("identity".to_string()).or_insert_with(|| json!({}));
+        let identity_obj = identity_obj.as_object_mut().ok_or("identity 格式错误")?;
+        if let Some(name) = identity.get("name") {
+            if name.is_null() {
+                identity_obj.remove("name");
+            } else {
+                identity_obj.insert("name".to_string(), name.clone());
+            }
+        }
+        if let Some(emoji) = identity.get("emoji") {
+            if emoji.is_null() {
+                identity_obj.remove("emoji");
+            } else {
+                identity_obj.insert("emoji".to_string(), emoji.clone());
+            }
+        }
+    }
+    if let Some(model) = config.get("model") {
+        if model.is_null() {
+            agent.remove("model");
+        } else {
+            agent.insert("model".to_string(), model.clone());
+        }
+    }
+    if let Some(thinking) = config.get("thinkingDefault") {
+        if thinking.is_null() {
+            agent.remove("thinkingDefault");
+        } else {
+            agent.insert("thinkingDefault".to_string(), thinking.clone());
+        }
+    }
+    if let Some(skills) = config.get("skills") {
+        if skills.is_null() {
+            agent.remove("skills");
+        } else {
+            agent.insert("skills".to_string(), skills.clone());
+        }
+    }
+    if let Some(tools) = config.get("tools") {
+        if tools.is_null() {
+            agent.remove("tools");
+        } else {
+            agent.insert("tools".to_string(), tools.clone());
+        }
+    }
+
+    let json_text = serde_json::to_string_pretty(&root).map_err(|e| format!("序列化失败: {e}"))?;
+    fs::write(&path, json_text).map_err(|e| format!("写入配置失败: {e}"))?;
+    let _ = super::config::do_reload_gateway(&app).await;
+    Ok(json!({ "ok": true }))
 }
 
 /// 创建新 agent（优先走 CLI，失败则直接写 openclaw.json 兜底）
@@ -595,4 +801,82 @@ pub async fn update_agent_model(
     let _ = super::config::do_reload_gateway(&app).await;
 
     Ok("已更新".into())
+}
+
+fn read_openclaw_config_value() -> Result<Value, String> {
+    let path = super::openclaw_dir().join("openclaw.json");
+    let content = fs::read_to_string(&path).map_err(|e| format!("读取配置失败: {e}"))?;
+    serde_json::from_str(&content).map_err(|e| format!("解析 JSON 失败: {e}"))
+}
+
+fn resolve_agent_workspace(id: &str, config: &Value) -> String {
+    config
+        .get("agents")
+        .and_then(|a| a.get("list"))
+        .and_then(|l| l.as_array())
+        .and_then(|list| {
+            list.iter()
+                .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id))
+                .and_then(|a| a.get("workspace"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| {
+            if id == "main" {
+                super::openclaw_dir()
+                    .join("workspace")
+                    .to_string_lossy()
+                    .to_string()
+            } else {
+                super::openclaw_dir()
+                    .join("agents")
+                    .join(id)
+                    .join("workspace")
+                    .to_string_lossy()
+                    .to_string()
+            }
+        })
+}
+
+fn resolve_agent_dir(id: &str, config: &Value) -> std::path::PathBuf {
+    let custom_dir = config
+        .get("agents")
+        .and_then(|a| a.get("list"))
+        .and_then(|l| l.as_array())
+        .and_then(|list| {
+            list.iter()
+                .find(|a| a.get("id").and_then(|v| v.as_str()) == Some(id))
+                .and_then(|a| a.get("agentDir"))
+                .and_then(|v| v.as_str())
+                .map(|s| std::path::PathBuf::from(s))
+        });
+    custom_dir.unwrap_or_else(|| {
+        if id == "main" {
+            super::openclaw_dir()
+        } else {
+            super::openclaw_dir().join("agents").join(id)
+        }
+    })
+}
+
+fn ensure_allowed_agent_file(name: &str) -> Result<(), String> {
+    if AGENT_FILE_ALLOWLIST.contains(&name) {
+        Ok(())
+    } else {
+        Err("不允许访问此文件".to_string())
+    }
+}
+
+fn bootstrap_file_desc(name: &str) -> &'static str {
+    match name {
+        "AGENTS.md" => "Agent 规则",
+        "SOUL.md" => "灵魂/人格",
+        "TOOLS.md" => "工具白名单",
+        "IDENTITY.md" => "身份信息",
+        "USER.md" => "用户上下文",
+        "HEARTBEAT.md" => "心跳指令",
+        "BOOTSTRAP.md" => "初始化引导",
+        "MEMORY.md" => "记忆存储",
+        _ => "",
+    }
 }

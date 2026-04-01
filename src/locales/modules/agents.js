@@ -10,6 +10,7 @@ export default {
   noDesc: _('无描述', 'No description', '無描述', '説明なし', '설명 없음'),
   default: _('默认', 'Default', '預設', 'デフォルト', '기본', 'Mặc định', 'Predeterminado', 'Padrão', 'По умолчанию', 'Par défaut', 'Standard'),
   backup: _('备份', 'Backup', '備份', 'バックアップ', '백업', 'Sao lưu', 'Respaldo', '', 'Резервная копия', 'Sauvegarde'),
+  detail: _('详情', 'Details', '詳情', '詳細', '상세', 'Chi tiết', 'Detalles', 'Detalhes', 'Подробности', 'Détails', 'Details'),
   edit: _('编辑', 'Edit', '編輯', '編集', '편집', 'Sửa', 'Editar', 'Editar', 'Редактировать', 'Modifier', 'Bearbeiten'),
   delete: _('删除', 'Delete', '刪除', '削除', '삭제', 'Xóa', 'Eliminar', 'Excluir', 'Удалить', 'Supprimer', 'Löschen'),
   labelName: _('名称:', 'Name:', '名稱:', '名前:', '이름:'),
@@ -44,4 +45,5 @@ export default {
   backingUp: _('正在备份 Agent「{id}」...', 'Backing up Agent "{id}"...', '正在備份 Agent「{id}」...', 'Agent「{id}」をバックアップ中...', 'Agent「{id}」 백업 중...'),
   backupDone: _('备份完成: {file}', 'Backup done: {file}', '備份完成: {file}', 'バックアップ完了: {file}', '백업 완료: {file}'),
   backupFailed: _('备份失败', 'Backup failed', '備份失敗', 'バックアップ失敗', '백업 실패'),
+  detailHint: _('点击卡片空白区域或“详情”按钮，进入新的 Agent 详情页。', 'Click a card or the Details button to open the new Agent detail page.', '點擊卡片空白區域或「詳情」按鈕，進入新的 Agent 詳情頁。', 'カード余白または「詳細」ボタンから Agent 詳細へ移動します。', '카드 빈 영역 또는 상세 버튼으로 Agent 상세 페이지로 이동합니다.'),
 }

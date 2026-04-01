@@ -8,6 +8,8 @@ pub struct ServiceStatus {
     pub description: String,
     /// CLI 工具是否已安装（Windows/Linux: openclaw CLI）
     pub cli_installed: bool,
+    pub ownership: Option<String>,
+    pub owned_by_current_instance: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

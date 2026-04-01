@@ -33,7 +33,8 @@ export function initRouter(contentEl) {
 
 async function loadRoute() {
   const hash = window.location.hash.slice(1) || _defaultRoute
-  const loader = routes[hash]
+  const routePath = hash.split('?')[0]
+  const loader = routes[routePath]
   if (!loader || !_contentEl) return
 
   // 竞态防护：记录本次加载 ID
@@ -49,7 +50,7 @@ async function loadRoute() {
   _contentEl.innerHTML = ''
 
   // 已缓存的模块：跳过 spinner，直接渲染
-  let mod = _moduleCache[hash]
+  let mod = _moduleCache[routePath]
   if (!mod) {
     _contentEl.innerHTML = ''
     // 仅首次加载显示 spinner
@@ -64,11 +65,11 @@ async function loadRoute() {
     try {
       mod = await retryLoad(loader, 3, 500)
     } catch (e) {
-      console.error('[router] 模块加载失败:', hash, e)
-      if (thisLoad === _loadId) showLoadError(_contentEl, hash, e)
+      console.error('[router] 模块加载失败:', routePath, e)
+      if (thisLoad === _loadId) showLoadError(_contentEl, routePath, e)
       return
     }
-    _moduleCache[hash] = mod
+    _moduleCache[routePath] = mod
   } else {
     _contentEl.innerHTML = ''
   }
@@ -81,10 +82,10 @@ async function loadRoute() {
     const renderFn = mod.render || mod.default
     page = renderFn ? await withTimeout(renderFn(), 15000, '页面渲染超时') : mod
   } catch (e) {
-    console.error('[router] 页面渲染失败:', hash, e)
+    console.error('[router] 页面渲染失败:', routePath, e)
     // 渲染失败时清除缓存，下次重试时重新加载模块
-    delete _moduleCache[hash]
-    if (thisLoad === _loadId) showLoadError(_contentEl, hash, e)
+    delete _moduleCache[routePath]
+    if (thisLoad === _loadId) showLoadError(_contentEl, routePath, e)
     return
   }
   if (thisLoad !== _loadId) return
@@ -102,7 +103,7 @@ async function loadRoute() {
 
   // 更新侧边栏激活状态
   document.querySelectorAll('.nav-item').forEach(item => {
-    item.classList.toggle('active', item.dataset.route === hash)
+    item.classList.toggle('active', item.dataset.route === routePath)
   })
 }
 

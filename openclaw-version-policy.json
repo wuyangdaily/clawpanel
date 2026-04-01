@@ -98,11 +98,20 @@
     },
     "0.10.0": {
       "official": {
-        "recommended": "2026.3.13"
+        "recommended": "2026.3.28"
       },
       "chinese": {
-        "recommended": "2026.3.13-zh.1"
+        "recommended": "2026.3.28-zh.2"
+      }
+    },
+    "0.11.0": {
+      "official": {
+        "recommended": "2026.3.28"
+      },
+      "chinese": {
+        "recommended": "2026.3.28-zh.2"
       }
     }
   }
 }
+

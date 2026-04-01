@@ -5,6 +5,7 @@
 import { api, getRequestLogs, clearRequestLogs } from '../lib/tauri-api.js'
 import { wsClient } from '../lib/ws-client.js'
 import { isOpenclawReady, isGatewayRunning } from '../lib/app-state.js'
+import { isForeignGatewayError, showGatewayConflictGuidance } from '../lib/gateway-ownership.js'
 import { icon, statusIcon } from '../lib/icons.js'
 import { toast } from '../components/toast.js'
 import { navigate } from '../router.js'
@@ -74,6 +75,12 @@ export async function render() {
   page.querySelector('#btn-doctor-fix').addEventListener('click', () => handleDoctor(page, true))
   loadDebugInfo(page)
   return page
+}
+
+async function openGatewayConflict(error = null) {
+  const services = await api.getServicesStatus().catch(() => [])
+  const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+  await showGatewayConflictGuidance({ error, service: gw })
 }
 
 async function loadDebugInfo(page) {
@@ -589,13 +596,27 @@ async function fixPairing(page) {
 
     // 2. 停止 Gateway（确保旧进程完全退出，新进程能重新读取配置）
     addLog(`${icon('zap', 14)} ${t('chatDebug.fixStoppingGw')}`)
-    try { await api.stopService('ai.openclaw.gateway') } catch {}
+    try {
+      await api.stopService('ai.openclaw.gateway')
+    } catch (e) {
+      if (isForeignGatewayError(e)) {
+        await openGatewayConflict(e)
+        throw e
+      }
+    }
     addLog(`${icon('clock', 14)} ${t('chatDebug.fixWaitExit')}`)
     await new Promise(resolve => setTimeout(resolve, 3000))
 
     // 3. 启动 Gateway（重新加载 openclaw.json 配置）
     addLog(`${icon('zap', 14)} ${t('chatDebug.fixStartingGw')}`)
-    await api.startService('ai.openclaw.gateway')
+    try {
+      await api.startService('ai.openclaw.gateway')
+    } catch (e) {
+      if (isForeignGatewayError(e)) {
+        await openGatewayConflict(e)
+      }
+      throw e
+    }
     addLog(`${statusIcon('ok', 14)} ${t('chatDebug.fixGwStartSent')}`)
 
     // 4. 等待 Gateway 就绪

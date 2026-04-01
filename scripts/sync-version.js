@@ -17,6 +17,13 @@ const root = resolve(__dirname, '..')
 // 读取 package.json
 const pkgPath = resolve(root, 'package.json')
 const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+const cargoPackageName = readFileSync(resolve(root, 'src-tauri/Cargo.toml'), 'utf8')
+  .match(/\[package\][\s\S]*?^name\s*=\s*"([^"]+)"/m)?.[1]
+
+if (!cargoPackageName) {
+  console.error('❌ src-tauri/Cargo.toml: 找不到 [package].name')
+  process.exit(1)
+}
 
 // 如果传入了新版本号，先更新 package.json
 const newVersion = process.argv[2]
@@ -32,6 +39,10 @@ if (newVersion) {
 
 const version = pkg.version
 
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 // 同步目标文件
 const targets = [
   {
@@ -43,9 +54,30 @@ const targets = [
     },
   },
   {
+    file: 'package-lock.json',
+    update(content) {
+      const obj = JSON.parse(content)
+      obj.version = version
+      if (obj.packages && obj.packages['']) {
+        obj.packages[''].version = version
+      }
+      return JSON.stringify(obj, null, 2) + '\n'
+    },
+  },
+  {
     file: 'src-tauri/Cargo.toml',
     update(content) {
       return content.replace(/^version\s*=\s*"[^"]*"/m, `version = "${version}"`)
+    },
+  },
+  {
+    file: 'src-tauri/Cargo.lock',
+    update(content) {
+      const pattern = new RegExp(`(\\[\\[package\\]\\]\\r?\\nname = "${escapeRegExp(cargoPackageName)}"\\r?\\nversion = ")[^"]*(")`)
+      if (!pattern.test(content)) {
+        throw new Error(`未找到 ${cargoPackageName} 的锁文件条目`)
+      }
+      return content.replace(pattern, `$1${version}$2`)
     },
   },
   {

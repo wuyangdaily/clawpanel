@@ -11,6 +11,7 @@ import services from './modules/services.js'
 import settings from './modules/settings.js'
 import models from './modules/models.js'
 import agents from './modules/agents.js'
+import agentDetail from './modules/agentDetail.js'
 import gateway from './modules/gateway.js'
 import security from './modules/security.js'
 import communication from './modules/communication.js'
@@ -28,12 +29,13 @@ import logs from './modules/logs.js'
 import assistant from './modules/assistant.js'
 import toast from './modules/toast.js'
 import modal from './modules/modal.js'
+import engagement from './modules/engagement.js'
 
 const MODULES = {
   common, sidebar, instance, dashboard, services, settings,
-  models, agents, gateway, security, communication, channels,
+  models, agents, agentDetail, gateway, security, communication, channels,
   memory, cron, usage, skills, chat, chatDebug, setup, about,
-  ext, logs, assistant, toast, modal,
+  ext, logs, assistant, toast, modal, engagement,
 }
 
 /** 构建所有语言字典 { 'zh-CN': { common: {...}, sidebar: {...}, ... }, ... } */

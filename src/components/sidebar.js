@@ -139,8 +139,8 @@ export function renderSidebar(el) {
         <img src="/images/logo.png" alt="ClawPanel">
       </div>
       <span class="sidebar-title">ClawPanel</span>
-      <button class="sidebar-collapse-btn" id="btn-sidebar-collapse" title="折叠/展开">${collapsed ? '»' : '«'}</button>
-      <button class="sidebar-close-btn" id="btn-sidebar-close" title="关闭菜单">&times;</button>
+      <button class="sidebar-collapse-btn" id="btn-sidebar-collapse" title="${t('sidebar.collapse')}">${collapsed ? '»' : '«'}</button>
+      <button class="sidebar-close-btn" id="btn-sidebar-close" title="${t('sidebar.closeMenu')}">&times;</button>
     </div>
     ${showSwitcher ? `<div class="instance-switcher" id="instance-switcher">
       <button class="instance-current" id="btn-instance-toggle">

@@ -236,7 +236,7 @@ async function saveFile(page, state) {
   if (!state.currentPath) return
   const content = page.querySelector('#file-editor').value
   try {
-    await api.writeMemoryFile(state.currentPath, content, null, state.agentId)
+    await api.writeMemoryFile(state.currentPath, content, state.category, state.agentId)
     toast(t('memory.fileSaved'), 'success')
   } catch (e) {
     toast(t('memory.saveFailed') + ': ' + e, 'error')

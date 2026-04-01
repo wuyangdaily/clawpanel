@@ -6,6 +6,7 @@ import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { showConfirm } from '../components/modal.js'
 import { t, getLang, setLang, getAvailableLangs, onLangChange } from '../lib/i18n.js'
+import { isMacPlatform } from '../lib/app-state.js'
 import { renderSidebar } from '../components/sidebar.js'
 
 const isTauri = !!window.__TAURI_INTERNALS__
@@ -13,6 +14,44 @@ const isTauri = !!window.__TAURI_INTERNALS__
 function escapeHtml(str) {
   if (!str) return ''
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+function platformDefaultDockerEndpoint() {
+  const isWin = navigator.platform?.startsWith('Win') || navigator.userAgent?.includes('Windows')
+  return isWin ? '//./pipe/docker_engine' : '/var/run/docker.sock'
+}
+
+function effectiveDockerEndpoint(cfg) {
+  return (cfg?.dockerEndpoint || '').trim() || platformDefaultDockerEndpoint()
+}
+
+function effectiveDockerImage(cfg) {
+  return (cfg?.dockerDefaultImage || '').trim() || 'ghcr.io/qingchencloud/openclaw'
+}
+
+function openclawInstallationIdentity(installation) {
+  const rawPath = String(installation?.path || '').trim()
+  if (!rawPath) return ''
+  const isWin = navigator.platform?.startsWith('Win') || navigator.userAgent?.includes('Windows')
+  if (!isWin) return rawPath
+  return rawPath
+    .replace(/\//g, '\\')
+    .replace(/\\openclaw(?:\.exe|\.ps1)?$/i, '\\openclaw.cmd')
+    .toLowerCase()
+}
+
+function dedupeOpenclawInstallations(list = []) {
+  const map = new Map()
+  const preferCmd = inst => /openclaw\.cmd$/i.test(String(inst?.path || ''))
+  for (const installation of Array.isArray(list) ? list : []) {
+    const key = openclawInstallationIdentity(installation)
+    if (!key) continue
+    const existing = map.get(key)
+    if (!existing || (!existing.active && installation.active) || (!preferCmd(existing) && preferCmd(installation))) {
+      map.set(key, installation)
+    }
+  }
+  return [...map.values()]
 }
 
 const REGISTRIES = [
@@ -51,6 +90,16 @@ export async function render() {
       <div id="openclaw-dir-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>
 
+    <div class="config-section" id="openclaw-search-section">
+      <div class="config-section-title">${t('settings.openclawSearchPaths')}</div>
+      <div id="openclaw-search-bar"><div class="stat-card loading-placeholder" style="height:96px"></div></div>
+    </div>
+
+    <div class="config-section" id="docker-defaults-section">
+      <div class="config-section-title">${t('settings.dockerDefaults')}</div>
+      <div id="docker-defaults-bar"><div class="stat-card loading-placeholder" style="height:84px"></div></div>
+    </div>
+
     <div class="config-section" id="cli-binding-section">
       <div class="config-section-title">${t('settings.openclawCli')}</div>
       <div id="cli-binding-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
@@ -62,7 +111,7 @@ export async function render() {
     </div>
 
     ${window.__TAURI_INTERNALS__ ? `<div class="config-section" id="autostart-section">
-      <div class="config-section-title">${t('settings.autostart') || '开机自启'}</div>
+      <div class="config-section-title">${t('settings.autostart')}</div>
       <div id="autostart-bar"><div class="stat-card loading-placeholder" style="height:48px"></div></div>
     </div>` : ''}
 
@@ -74,7 +123,7 @@ export async function render() {
 }
 
 async function loadAll(page) {
-  const tasks = [loadProxyConfig(page), loadModelProxyConfig(page), loadOpenclawDir(page), loadCliBinding(page)]
+  const tasks = [loadProxyConfig(page), loadModelProxyConfig(page), loadOpenclawDir(page), loadOpenclawSearchPaths(page), loadDockerDefaults(page), loadCliBinding(page)]
   tasks.push(loadRegistry(page))
   if (window.__TAURI_INTERNALS__) tasks.push(loadAutostart(page))
   await Promise.all(tasks)
@@ -171,7 +220,7 @@ async function loadOpenclawDir(page) {
   const bar = page.querySelector('#openclaw-dir-bar')
   if (!bar) return
   try {
-    const info = isTauri ? await api.getOpenclawDir() : { path: '~/.openclaw', isCustom: false, configExists: true }
+    const info = await api.getOpenclawDir()
     const cfg = await api.readPanelConfig()
     const customValue = cfg?.openclawDir || ''
     const statusText = info.configExists
@@ -209,7 +258,14 @@ async function handleSaveOpenclawDir(page) {
   }
   await api.writePanelConfig(cfg)
   await loadOpenclawDir(page)
-  await promptRestart(value ? t('settings.customPathSaved') : t('settings.defaultRestored'))
+  await loadCliBinding(page)
+  const savedMsg = value ? t('settings.customPathSaved') : t('settings.defaultRestored')
+  const refreshed = await maybeRefreshGatewayServiceBinding()
+  if (refreshed) {
+    toast(savedMsg, 'success')
+    return
+  }
+  await promptRestart(savedMsg)
 }
 
 async function handleResetOpenclawDir(page) {
@@ -217,7 +273,143 @@ async function handleResetOpenclawDir(page) {
   delete cfg.openclawDir
   await api.writePanelConfig(cfg)
   await loadOpenclawDir(page)
+  await loadCliBinding(page)
+  const refreshed = await maybeRefreshGatewayServiceBinding()
+  if (refreshed) {
+    toast(t('settings.defaultRestored'), 'success')
+    return
+  }
   await promptRestart(t('settings.defaultRestored'))
+}
+
+async function loadOpenclawSearchPaths(page) {
+  const bar = page.querySelector('#openclaw-search-bar')
+  if (!bar) return
+  try {
+    const cfg = await api.readPanelConfig()
+    const value = Array.isArray(cfg?.openclawSearchPaths) ? cfg.openclawSearchPaths.join('\n') : ''
+    bar.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:var(--space-sm)">
+        <textarea class="form-input" data-name="openclaw-search-paths" rows="4" placeholder="${t('settings.searchPathsPlaceholder')}" style="max-width:680px;min-height:108px;resize:vertical">${escapeHtml(value)}</textarea>
+        <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" data-action="save-openclaw-search-paths">${t('common.save')}</button>
+        </div>
+      </div>
+      <div class="form-hint" style="margin-top:var(--space-xs)">
+        ${t('settings.searchPathsHint')}
+      </div>
+    `
+  } catch (e) {
+    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
+  }
+}
+
+function parseOpenclawSearchPaths(raw) {
+  const values = []
+  const seen = new Set()
+  for (const part of String(raw || '').split(/[\r\n;]+/)) {
+    const value = part.trim()
+    if (!value) continue
+    const key = value.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    values.push(value)
+  }
+  return values
+}
+
+async function handleSaveOpenclawSearchPaths(page) {
+  const input = page.querySelector('[data-name="openclaw-search-paths"]')
+  const paths = parseOpenclawSearchPaths(input?.value || '')
+  const cfg = await api.readPanelConfig()
+  if (paths.length > 0) {
+    cfg.openclawSearchPaths = paths
+  } else {
+    delete cfg.openclawSearchPaths
+  }
+  await api.writePanelConfig(cfg)
+  await loadOpenclawSearchPaths(page)
+  await loadCliBinding(page)
+  toast(paths.length > 0 ? t('settings.searchPathsSaved') : t('settings.searchPathsCleared'), 'success')
+}
+
+async function loadDockerDefaults(page) {
+  const bar = page.querySelector('#docker-defaults-bar')
+  if (!bar) return
+  try {
+    const cfg = await api.readPanelConfig()
+    const endpoint = cfg?.dockerEndpoint || ''
+    const image = cfg?.dockerDefaultImage || ''
+    const currentEndpoint = effectiveDockerEndpoint(cfg)
+    const currentImage = effectiveDockerImage(cfg)
+    bar.innerHTML = `
+      <div style="margin-bottom:var(--space-xs);display:flex;flex-direction:column;gap:4px">
+        <div><span class="form-hint">${t('settings.currentDefault')}:</span> <code style="font-size:var(--font-size-xs)">${escapeHtml(currentEndpoint)}</code></div>
+        <div><span class="form-hint">${t('settings.dockerDefaultImage')}:</span> <code style="font-size:var(--font-size-xs)">${escapeHtml(currentImage)}</code></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:var(--space-sm)">
+        <input class="form-input" data-name="docker-endpoint" placeholder="${t('settings.dockerEndpointPlaceholder')}" value="${escapeHtml(endpoint)}" style="max-width:680px">
+        <input class="form-input" data-name="docker-default-image" placeholder="${t('settings.dockerDefaultImagePlaceholder')}" value="${escapeHtml(image)}" style="max-width:680px">
+        <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap">
+          <button class="btn btn-primary btn-sm" data-action="save-docker-defaults">${t('common.save')}</button>
+        </div>
+      </div>
+      <div class="form-hint" style="margin-top:var(--space-xs)">
+        ${t('settings.dockerDefaultsHint')}
+      </div>
+    `
+  } catch (e) {
+    bar.innerHTML = `<div style="color:var(--error)">${t('common.loadFailed')}: ${escapeHtml(String(e))}</div>`
+  }
+}
+
+async function handleSaveDockerDefaults(page) {
+  const endpointInput = page.querySelector('[data-name="docker-endpoint"]')
+  const imageInput = page.querySelector('[data-name="docker-default-image"]')
+  const endpoint = (endpointInput?.value || '').trim()
+  const image = (imageInput?.value || '').trim()
+  const cfg = await api.readPanelConfig()
+  if (endpoint) cfg.dockerEndpoint = endpoint
+  else delete cfg.dockerEndpoint
+  if (image) cfg.dockerDefaultImage = image
+  else delete cfg.dockerDefaultImage
+  await api.writePanelConfig(cfg)
+  await loadDockerDefaults(page)
+  toast(t('settings.dockerDefaultsSaved'), 'success')
+}
+
+async function maybeRefreshGatewayServiceBinding() {
+  if (!isMacPlatform()) return false
+
+  const [versionInfo, dirInfo] = await Promise.all([
+    api.getVersionInfo().catch(() => null),
+    api.getOpenclawDir().catch(() => null),
+  ])
+  if (!versionInfo?.cli_path || dirInfo?.configExists === false) {
+    return false
+  }
+
+  const shouldRefresh = await showConfirm(t('settings.gatewayServiceRefreshConfirm'))
+  if (!shouldRefresh) return false
+
+  toast(t('settings.gatewayServiceRefreshing'), 'info')
+  try {
+    const services = await api.getServicesStatus().catch(() => [])
+    const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+    const shouldStartAgain = gw?.running === true && gw?.owned_by_current_instance !== false
+
+    await api.uninstallGateway().catch(() => {})
+    await api.installGateway()
+    if (shouldStartAgain) {
+      await api.startService('ai.openclaw.gateway')
+    }
+
+    toast(t('settings.gatewayServiceRefreshed'), 'success')
+    return true
+  } catch (e) {
+    toast(`${t('settings.gatewayServiceRefreshFailed')}: ${e?.message || e}`, 'warning')
+    return false
+  }
 }
 
 async function promptRestart(msg) {
@@ -261,6 +453,12 @@ function bindEvents(page) {
           break
         case 'reset-openclaw-dir':
           await handleResetOpenclawDir(page)
+          break
+        case 'save-openclaw-search-paths':
+          await handleSaveOpenclawSearchPaths(page)
+          break
+        case 'save-docker-defaults':
+          await handleSaveDockerDefaults(page)
           break
         case 'bind-cli':
           await handleBindCli(page, btn.dataset.path)
@@ -359,7 +557,7 @@ async function loadCliBinding(page) {
     const version = await api.getVersionInfo()
     const cfg = await api.readPanelConfig()
     const boundPath = cfg?.openclawCliPath || ''
-    const installations = version.all_installations || []
+    const installations = dedupeOpenclawInstallations(version.all_installations || [])
     const currentPath = version.cli_path || ''
 
     const sourceLabel = (src) => ({
@@ -417,6 +615,7 @@ async function handleBindCli(page, path) {
   await api.writePanelConfig(cfg)
   toast(t('common.saveSuccess'), 'success')
   await loadCliBinding(page)
+  await maybeRefreshGatewayServiceBinding()
 }
 
 async function handleUnbindCli(page) {
@@ -425,6 +624,7 @@ async function handleUnbindCli(page) {
   await api.writePanelConfig(cfg)
   toast(t('common.saveSuccess'), 'success')
   await loadCliBinding(page)
+  await maybeRefreshGatewayServiceBinding()
 }
 
 // ===== 语言切换 =====
@@ -468,28 +668,28 @@ async function loadAutostart(page) {
       <div style="display:flex;align-items:center;gap:var(--space-sm)">
         <label style="display:flex;align-items:center;gap:6px;font-size:var(--font-size-sm);cursor:pointer">
           <input type="checkbox" id="autostart-toggle" ${enabled ? 'checked' : ''}>
-          ${t('settings.autostartToggle') || '系统启动时自动运行 ClawPanel'}
+          ${t('settings.autostartToggle')}
         </label>
       </div>
       <div class="form-hint" style="margin-top:var(--space-xs)">
-        ${t('settings.autostartHint') || '开启后，电脑重启时 ClawPanel 会自动启动并检测 Gateway 状态'}
+        ${t('settings.autostartHint')}
       </div>
     `
     bar.querySelector('#autostart-toggle')?.addEventListener('change', async (e) => {
       try {
         if (e.target.checked) {
           await enable()
-          toast(t('settings.autostartEnabled') || '已开启开机自启', 'success')
+          toast(t('settings.autostartEnabled'), 'success')
         } else {
           await disable()
-          toast(t('settings.autostartDisabled') || '已关闭开机自启', 'success')
+          toast(t('settings.autostartDisabled'), 'success')
         }
       } catch (err) {
         e.target.checked = !e.target.checked
-        toast((t('settings.autostartFailed') || '设置失败') + ': ' + err, 'error')
+        toast(t('settings.autostartFailed') + ': ' + err, 'error')
       }
     })
   } catch {
-    bar.innerHTML = `<div style="color:var(--text-tertiary);font-size:var(--font-size-sm)">${t('settings.autostartUnavailable') || '当前环境不支持开机自启'}</div>`
+    bar.innerHTML = `<div style="color:var(--text-tertiary);font-size:var(--font-size-sm)">${t('settings.autostartUnavailable')}</div>`
   }
 }

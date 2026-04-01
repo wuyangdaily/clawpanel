@@ -129,7 +129,8 @@ export async function detectOpenclawStatus() {
 
     // 顺便检测 Gateway 运行状态
     if (services.status === 'fulfilled' && services.value?.length > 0) {
-      _setGatewayRunning(services.value[0]?.running === true)
+      const gw = services.value.find?.(s => s.label === 'ai.openclaw.gateway') || services.value[0]
+      _setGatewayRunning(gw?.running === true && gw?.owned_by_current_instance !== false)
     }
   } catch {
     _openclawReady = false
@@ -176,13 +177,17 @@ async function _tryAutoRestart() {
   // 重启前再次确认端口确实空闲，防止端口被其他程序占用时无限拉起
   try {
     const services = await api.getServicesStatus()
-    const gw = services?.[0]
+    const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0]
     if (gw?.running) {
-      console.log('[guardian] 端口仍在使用中，跳过自动重启')
+      console.log(gw?.owned_by_current_instance === false
+        ? '[guardian] 检测到外部 Gateway 正在占用端口，跳过自动重启'
+        : '[guardian] 端口仍在使用中，跳过自动重启')
       _gwStopCount = 0
-      _gatewayRunning = true
-      _gatewayRunningSince = Date.now()
-      _gwListeners.forEach(fn => { try { fn(true) } catch {} })
+      if (gw?.owned_by_current_instance !== false) {
+        _gatewayRunning = true
+        _gatewayRunningSince = Date.now()
+        _gwListeners.forEach(fn => { try { fn(true) } catch {} })
+      }
       return
     }
   } catch {}
@@ -204,7 +209,10 @@ export async function refreshGatewayStatus() {
   try {
     const services = await api.getServicesStatus()
     if (services?.length > 0) {
-      const nowRunning = services[0]?.running === true
+      const gw = services.find?.(s => s.label === 'ai.openclaw.gateway') || services[0]
+      const ownedRunning = gw?.running === true && gw?.owned_by_current_instance !== false
+      const foreignRunning = gw?.running === true && gw?.owned_by_current_instance === false
+      const nowRunning = ownedRunning
       if (nowRunning) {
         _gwStopCount = 0
         if (!_gatewayRunning) {
@@ -217,8 +225,12 @@ export async function refreshGatewayStatus() {
           _autoRestartCount = 0
         }
       } else {
-        _gwStopCount++
-        if (_gwStopCount >= 2 || !_gatewayRunning) {
+        if (foreignRunning) {
+          _gwStopCount = 0
+        } else {
+          _gwStopCount++
+        }
+        if (foreignRunning || _gwStopCount >= 2 || !_gatewayRunning) {
           _setGatewayRunning(false)
         }
       }

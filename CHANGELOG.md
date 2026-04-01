@@ -5,6 +5,22 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，
 版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [0.11.0] - 2026-03-31
+
+### 新功能 (Features)
+
+- **本地版本准备** — ClawPanel 程序版本已对齐到 `0.11.0`，同步覆盖 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json` 与 `docs/index.html`
+- **OpenClaw 3.28 策略映射** — 新增 `0.11.0` → 官方版 `2026.3.28` / 汉化版 `2026.3.28-zh.2` 的推荐稳定版映射，同时保留 `0.9.x` 旧客户端的保守推荐策略
+
+### 修复 (Fixes)
+
+- **仪表盘运行态误导** — Dashboard 仅在 Gateway 运行时才请求 `getStatusSummary()`；Gateway 停止时清空旧缓存，并将 Web `file-read` 来源明确标注为 `openclaw.json / 本地安装`，避免把本地配置快照误读成运行态
+- **版本同步脚本** — `npm run version:set` / `npm run version:sync` 现在会一并同步 `package-lock.json`，避免程序版本与锁文件版本再次漂移
+
+### 改进 (Improvements)
+
+- **维护文档** — 更新 `docs/version-maintenance.md` 与 `docs/openclaw-2026-3-28-compatibility.md`，补齐 `0.11.0` 维护要点、旧客户端兼容边界与当前 Web 写入链路结论
+
 ## [0.10.0] - 2026-03-26
 
 ### 新功能 (Features)

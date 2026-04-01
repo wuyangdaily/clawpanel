@@ -4,6 +4,7 @@
 import { api } from '../lib/tauri-api.js'
 import { toast } from '../components/toast.js'
 import { getActiveInstance, onGatewayChange } from '../lib/app-state.js'
+import { isForeignGatewayError, isForeignGatewayService, maybeShowForeignGatewayBindingPrompt, showGatewayConflictGuidance } from '../lib/gateway-ownership.js'
 import { navigate } from '../router.js'
 import { t } from '../lib/i18n.js'
 
@@ -64,6 +65,31 @@ export function cleanup() {
   if (_unsubGw) { _unsubGw(); _unsubGw = null }
 }
 
+function openclawInstallationIdentity(installation) {
+  const rawPath = String(installation?.path || '').trim()
+  if (!rawPath) return ''
+  const isWin = navigator.platform?.startsWith('Win') || navigator.userAgent?.includes('Windows')
+  if (!isWin) return rawPath
+  return rawPath
+    .replace(/\//g, '\\')
+    .replace(/\\openclaw(?:\.exe|\.ps1)?$/i, '\\openclaw.cmd')
+    .toLowerCase()
+}
+
+function dedupeOpenclawInstallations(list = []) {
+  const map = new Map()
+  const preferCmd = inst => /openclaw\.cmd$/i.test(String(inst?.path || ''))
+  for (const installation of Array.isArray(list) ? list : []) {
+    const key = openclawInstallationIdentity(installation)
+    if (!key) continue
+    const existing = map.get(key)
+    if (!existing || (!existing.active && installation.active) || (!preferCmd(existing) && preferCmd(installation))) {
+      map.set(key, installation)
+    }
+  }
+  return [...map.values()]
+}
+
 let _dashboardInitialized = false
 let _dashboardVersionCache = null
 let _dashboardStatusSummaryCache = null
@@ -97,9 +123,7 @@ async function loadDashboardData(page, fullRefresh = false) {
     api.listAgents(),
     api.readMcpConfig(),
     api.listBackups(),
-    // getStatusSummary 是最重的调用（spawn openclaw status --json），只在首次加载时调用
-    (!_dashboardInitialized || fullRefresh || !_dashboardStatusSummaryCache) ? api.getStatusSummary() : Promise.resolve(_dashboardStatusSummaryCache),
-  ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
+  ]), 15000).catch(() => [{ status: 'rejected' }, { status: 'rejected' }, { status: 'rejected' }])
   const logsP = api.readLogTail('gateway', 20).catch(() => '')
 
   // 第一波：服务状态 + 配置 + 版本 → 立即渲染统计卡片
@@ -109,6 +133,11 @@ async function loadDashboardData(page, fullRefresh = false) {
     ? (_dashboardVersionCache = versionRes.value)
     : (_dashboardVersionCache || {})
   const config = configRes.status === 'fulfilled' ? configRes.value : null
+  const gw = services.find(s => s.label === 'ai.openclaw.gateway')
+  const shouldLoadStatusSummary = gw?.running === true
+  if (!shouldLoadStatusSummary) {
+    _dashboardStatusSummaryCache = null
+  }
   if (servicesRes.status === 'rejected') toast(t('dashboard.servicesLoadFail'), 'error')
   if (versionRes.status === 'rejected') toast(t('dashboard.versionLoadFail'), 'error')
 
@@ -138,15 +167,29 @@ async function loadDashboardData(page, fullRefresh = false) {
   }
 
   renderStatCards(page, services, version, [], config)
+  if (gw) {
+    maybeShowForeignGatewayBindingPrompt({
+      service: gw,
+      onRefresh: () => loadDashboardData(page, true),
+    }).catch(() => {})
+  }
 
   // 第二波：Agent、MCP、备份 → 更新卡片 + 渲染总览
-  const [agentsRes, mcpRes, backupsRes, statusRes] = await secondaryP
+  const [agentsRes, mcpRes, backupsRes] = await secondaryP
   const agents = agentsRes.status === 'fulfilled' ? agentsRes.value : []
   const mcpConfig = mcpRes.status === 'fulfilled' ? mcpRes.value : null
   const backups = backupsRes.status === 'fulfilled' ? backupsRes.value : []
-  const statusSummary = (statusRes.status === 'fulfilled' && statusRes.value)
-    ? (_dashboardStatusSummaryCache = statusRes.value)
-    : _dashboardStatusSummaryCache
+  let statusSummary = null
+  if (shouldLoadStatusSummary) {
+    try {
+      statusSummary = (!_dashboardInitialized || fullRefresh || !_dashboardStatusSummaryCache)
+        ? await withTimeout(api.getStatusSummary(), 15000)
+        : _dashboardStatusSummaryCache
+      _dashboardStatusSummaryCache = statusSummary
+    } catch {
+      statusSummary = _dashboardStatusSummaryCache
+    }
+  }
 
   renderStatCards(page, services, version, agents, config)
   renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary)
@@ -158,9 +201,21 @@ async function loadDashboardData(page, fullRefresh = false) {
   _dashboardInitialized = true
 }
 
+async function openGatewayConflict(page, error = null, reason = null) {
+  const services = await api.getServicesStatus().catch(() => [])
+  const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+  await showGatewayConflictGuidance({
+    error,
+    service: gw,
+    reason,
+    onRefresh: async () => loadDashboardData(page, true),
+  })
+}
+
 function renderStatCards(page, services, version, agents, config) {
   const cardsEl = page.querySelector('#stat-cards')
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
+  const foreignGateway = isForeignGatewayService(gw)
   const runningCount = services.filter(s => s.running).length
   const versionMeta = version.recommended
     ? `${version.ahead_of_recommended ? t('dashboard.versionAhead', { version: version.recommended }) : version.is_recommended ? t('dashboard.versionStable', { version: version.recommended }) : t('dashboard.versionRecommend', { version: version.recommended })}${version.latest_update_available && version.latest ? ' · ' + t('dashboard.versionLatest', { version: version.latest }) : ''}`
@@ -168,7 +223,7 @@ function renderStatCards(page, services, version, agents, config) {
 
   // CLI 路径信息
   const cliSourceLabel = { standalone: t('dashboard.cliSourceStandalone'), 'npm-zh': t('dashboard.cliSourceNpmZh'), 'npm-official': t('dashboard.cliSourceNpmOfficial'), 'npm-global': t('dashboard.cliSourceNpmGlobal') }[version.cli_source] || t('dashboard.cliSourceUnknown')
-  const installCount = version.all_installations?.length || 0
+  const installCount = dedupeOpenclawInstallations(version.all_installations).length
   const multiInstall = installCount > 1
 
   const defaultAgent = agents.find(a => a.id === 'main')?.name || 'main'
@@ -181,8 +236,15 @@ function renderStatCards(page, services, version, agents, config) {
         <span class="stat-card-label">${t('dashboard.gateway')}</span>
         <span class="status-dot ${gw?.running ? 'running' : 'stopped'}"></span>
       </div>
-      <div class="stat-card-value">${gw?.running ? t('common.running') : t('common.stopped')}</div>
-      <div class="stat-card-meta">${gw?.pid ? 'PID: ' + gw.pid : (gw?.running ? t('dashboard.portDetect') : t('dashboard.notStarted'))}</div>
+      <div class="stat-card-value">${foreignGateway ? t('dashboard.externalInstance') : gw?.running ? t('common.running') : t('common.stopped')}</div>
+      <div class="stat-card-meta">${foreignGateway ? t('dashboard.externalGatewayDetected', { pid: gw?.pid ? ' · PID ' + gw.pid : '' }) : gw?.pid ? 'PID: ' + gw.pid : (gw?.running ? t('dashboard.portDetect') : t('dashboard.notStarted'))}</div>
+      ${foreignGateway
+        ? `<div class="stat-card-meta" style="margin-top:8px;color:var(--warning);line-height:1.6">${t('dashboard.foreignGatewayHint')}</div>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+             <button class="btn btn-secondary btn-xs" data-action="resolve-foreign-gateway">${t('dashboard.viewGuidance')}</button>
+             <button class="btn btn-primary btn-xs" data-action="open-settings">${t('dashboard.goSettings')}</button>
+           </div>`
+        : ''}
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
@@ -191,6 +253,13 @@ function renderStatCards(page, services, version, agents, config) {
       <div class="stat-card-value">${version.current || t('common.unknown')}</div>
       <div class="stat-card-meta">${versionMeta}</div>
       ${version.cli_path ? `<div class="stat-card-meta" style="margin-top:2px;font-size:11px;opacity:0.7" title="${escapeHtml(version.cli_path)}">${cliSourceLabel}${multiInstall ? ' · <span style="color:var(--warning)">' + t('dashboard.installCount', { count: installCount }) + '</span>' : ''}</div>` : ''}
+      ${multiInstall
+        ? `<div class="stat-card-meta" style="margin-top:8px;color:var(--warning);line-height:1.6">${t('dashboard.multiInstallCardHint')}</div>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+             <button class="btn btn-secondary btn-xs" data-action="resolve-multi-install">${t('dashboard.viewGuidance')}</button>
+             <button class="btn btn-primary btn-xs" data-action="open-settings">${t('dashboard.goSettings')}</button>
+           </div>`
+        : ''}
     </div>
     <div class="stat-card">
       <div class="stat-card-header">
@@ -227,6 +296,7 @@ function renderStatCards(page, services, version, agents, config) {
 function renderOverview(page, services, mcpConfig, backups, config, agents, statusSummary) {
   const containerEl = page.querySelector('#dashboard-overview-container')
   const gw = services.find(s => s.label === 'ai.openclaw.gateway')
+  const foreignGateway = isForeignGatewayService(gw)
   const mcpCount = mcpConfig?.mcpServers ? Object.keys(mcpConfig.mcpServers).length : 0
 
   const formatDate = (timestamp) => {
@@ -243,6 +313,9 @@ function renderOverview(page, services, mcpConfig, backups, config, agents, stat
   const lastUpdate = config?.meta?.lastTouchedVersion || t('common.unknown')
   const runtimeVer = statusSummary?.runtimeVersion || null
   const sessions = statusSummary?.sessions || null
+  const runtimeMeta = runtimeVer
+    ? (statusSummary?.source === 'file-read' ? t('dashboard.runtimeMetaFileRead') : t('dashboard.runtimeMetaLive'))
+    : t('dashboard.runtimeMetaConfig')
 
   const gwPort = config?.gateway?.port || 18789
   const primaryModel = config?.agents?.defaults?.model?.primary || t('dashboard.notSet')
@@ -251,16 +324,18 @@ function renderOverview(page, services, mcpConfig, backups, config, agents, stat
     <div class="dashboard-overview">
       <div class="overview-grid">
         <div class="overview-card" data-nav="/gateway">
-          <div class="overview-card-icon" style="color:${gw?.running ? 'var(--success)' : 'var(--error)'}">
+          <div class="overview-card-icon" style="color:${foreignGateway ? 'var(--warning)' : gw?.running ? 'var(--success)' : 'var(--error)'}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
           </div>
           <div class="overview-card-body">
             <div class="overview-card-title">Gateway</div>
-            <div class="overview-card-value" style="color:${gw?.running ? 'var(--success)' : 'var(--error)'}">${gw?.running ? t('common.running') : t('common.stopped')}</div>
-            <div class="overview-card-meta">${t('dashboard.port')} ${gwPort} ${gw?.pid ? '· PID ' + gw.pid : ''}</div>
+            <div class="overview-card-value" style="color:${foreignGateway ? 'var(--warning)' : gw?.running ? 'var(--success)' : 'var(--error)'}">${foreignGateway ? t('dashboard.externalInstance') : gw?.running ? t('common.running') : t('common.stopped')}</div>
+            <div class="overview-card-meta">${foreignGateway ? `${t('dashboard.port')} ${gwPort}${gw?.pid ? ' · PID ' + gw.pid : ''} · ${t('dashboard.viewOnlyStatus')}` : `${t('dashboard.port')} ${gwPort} ${gw?.pid ? '· PID ' + gw.pid : ''}`}</div>
           </div>
           <div class="overview-card-actions">
-            ${gw?.running
+            ${foreignGateway
+              ? '<button class="btn btn-secondary btn-xs" data-action="resolve-foreign-gateway">' + t('dashboard.viewGuidance') + '</button><button class="btn btn-primary btn-xs" data-action="open-settings">' + t('dashboard.goSettings') + '</button>'
+              : gw?.running
               ? '<button class="btn btn-danger btn-xs" data-action="stop-gw">' + t('dashboard.stopBtn') + '</button><button class="btn btn-secondary btn-xs" data-action="restart-gw">' + t('dashboard.restartBtn') + '</button>'
               : '<button class="btn btn-primary btn-xs" data-action="start-gw">' + t('dashboard.startBtn') + '</button>'
             }
@@ -318,7 +393,7 @@ function renderOverview(page, services, mcpConfig, backups, config, agents, stat
           <div class="overview-card-body">
             <div class="overview-card-title">${t('dashboard.runtimeVersion')}</div>
             <div class="overview-card-value" style="font-size:var(--font-size-sm)">${runtimeVer || lastUpdate}</div>
-            <div class="overview-card-meta">${runtimeVer ? 'OpenClaw Runtime' : 'openclaw.json'}</div>
+            <div class="overview-card-meta">${runtimeMeta}</div>
           </div>
         </div>
       </div>
@@ -420,13 +495,31 @@ function bindActions(page) {
     if (!actionBtn) return
     const action = actionBtn.dataset.action
 
+    if (action === 'open-settings') {
+      navigate('/settings')
+      return
+    }
+
+    if (action === 'resolve-foreign-gateway') {
+      await openGatewayConflict(page, null, 'foreign-gateway')
+      return
+    }
+
+    if (action === 'resolve-multi-install') {
+      await openGatewayConflict(page, null, 'multiple-installations')
+      return
+    }
+
     if (action === 'start-gw') {
       actionBtn.disabled = true; actionBtn.textContent = t('dashboard.starting')
       try {
         await api.startService('ai.openclaw.gateway')
         toast(t('dashboard.gwStartSent'), 'success')
         setTimeout(() => loadDashboardData(page), 2000)
-      } catch (err) { toast(t('dashboard.startFail') + ': ' + err, 'error') }
+      } catch (err) {
+        if (isForeignGatewayError(err)) await openGatewayConflict(page, err)
+        else toast(t('dashboard.startFail') + ': ' + err, 'error')
+      }
       finally { actionBtn.disabled = false; actionBtn.textContent = t('dashboard.startBtn') }
     }
     if (action === 'stop-gw') {
@@ -435,7 +528,10 @@ function bindActions(page) {
         await api.stopService('ai.openclaw.gateway')
         toast(t('dashboard.gwStopped'), 'success')
         setTimeout(() => loadDashboardData(page), 1500)
-      } catch (err) { toast(t('dashboard.stopFail') + ': ' + err, 'error') }
+      } catch (err) {
+        if (isForeignGatewayError(err)) await openGatewayConflict(page, err)
+        else toast(t('dashboard.stopFail') + ': ' + err, 'error')
+      }
       finally { actionBtn.disabled = false; actionBtn.textContent = t('dashboard.stopBtn') }
     }
     if (action === 'restart-gw') {
@@ -444,7 +540,10 @@ function bindActions(page) {
         await api.restartService('ai.openclaw.gateway')
         toast(t('dashboard.gwRestartSent'), 'success')
         setTimeout(() => loadDashboardData(page), 3000)
-      } catch (err) { toast(t('dashboard.restartFail') + ': ' + err, 'error') }
+      } catch (err) {
+        if (isForeignGatewayError(err)) await openGatewayConflict(page, err)
+        else toast(t('dashboard.restartFail') + ': ' + err, 'error')
+      }
       finally { actionBtn.disabled = false; actionBtn.textContent = t('dashboard.restartBtn') }
     }
   })
@@ -456,7 +555,8 @@ function bindActions(page) {
     try {
       await api.restartService('ai.openclaw.gateway')
     } catch (e) {
-      toast(t('dashboard.restartFail') + ': ' + e, 'error')
+      if (isForeignGatewayError(e)) await openGatewayConflict(page, e)
+      else toast(t('dashboard.restartFail') + ': ' + e, 'error')
       btnRestart.disabled = false
       btnRestart.classList.remove('btn-loading')
       btnRestart.textContent = t('dashboard.restartGw')

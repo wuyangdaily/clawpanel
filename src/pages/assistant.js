@@ -996,7 +996,7 @@ async function loadOpenClawSoul(agentId = 'default') {
   try {
     const sysInfo = await api.assistantSystemInfo()
     const home = sysInfo.match(/主目录[:：]\s*(.+)/)?.[1]?.trim() || sysInfo.match(/Home[:：]\s*(.+)/)?.[1]?.trim() || ''
-    if (!home) throw new Error('无法获取主目录')
+    if (!home) throw new Error(t('assistant.errHomeUnavailable'))
     // default/main 使用 ~/.openclaw/workspace，其他使用 agents/{id}/workspace
     let ws
     if (agentId === 'default' || agentId === 'main') {
@@ -1006,7 +1006,7 @@ async function loadOpenClawSoul(agentId = 'default') {
     }
     let wsExists = false
     try { await api.assistantListDir(ws); wsExists = true } catch {}
-    if (!wsExists) throw new Error('Agent workspace 不存在: ' + agentId)
+    if (!wsExists) throw new Error(t('assistant.errWorkspaceMissing', { agentId }))
 
     const readSafe = async (p) => { try { return await api.assistantReadFile(p) } catch { return null } }
 
@@ -1265,7 +1265,7 @@ function renderImagePreview() {
   container.innerHTML = _pendingImages.map(img => `
     <div class="ast-img-thumb" data-img-id="${img.id}">
       <img src="${img.dataUrl}" alt="${escHtml(img.name)}"/>
-      <button class="ast-img-thumb-del" data-img-del="${img.id}" title="移除">${delSvg}</button>
+      <button class="ast-img-thumb-del" data-img-del="${img.id}" title="${t('common.delete')}">${delSvg}</button>
     </div>
   `).join('')
 }
@@ -2217,7 +2217,7 @@ async function callAIWithTools(messages, onStatus, onToolProgress) {
     const choice = data.choices?.[0]
     const assistantMsg = choice?.message
 
-    if (!assistantMsg) throw new Error('AI 未返回有效响应')
+    if (!assistantMsg) throw new Error(t('assistant.errInvalidResponse'))
 
     if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
       currentMessages.push(assistantMsg)

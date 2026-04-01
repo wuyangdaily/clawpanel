@@ -13,8 +13,9 @@ import { wsClient } from './lib/ws-client.js'
 import { api, checkBackendHealth, isBackendOnline, onBackendStatusChange } from './lib/tauri-api.js'
 import { version as APP_VERSION } from '../package.json'
 import { statusIcon } from './lib/icons.js'
+import { isForeignGatewayError, showGatewayConflictGuidance } from './lib/gateway-ownership.js'
 import { tryShowEngagement } from './components/engagement.js'
-import { initI18n } from './lib/i18n.js'
+import { initI18n, t } from './lib/i18n.js'
 
 // 样式
 import './style/variables.css'
@@ -35,6 +36,12 @@ initI18n()
 /** HTML 转义，防止 XSS 注入 */
 function escapeHtml(str) {
   return (str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+async function openGatewayConflict(error = null) {
+  const services = await api.getServicesStatus().catch(() => [])
+  const gw = services?.find?.(s => s.label === 'ai.openclaw.gateway') || services?.[0] || null
+  await showGatewayConflictGuidance({ error, service: gw })
 }
 
 // === 访问密码保护（Web + 桌面端通用） ===
@@ -83,19 +90,19 @@ function showBackendDownOverlay() {
   overlay.innerHTML = `
     <div class="login-card" style="text-align:center">
       ${_logoSvg}
-      <div class="login-title" style="color:var(--error,#ef4444)">后端未启动</div>
+      <div class="login-title" style="color:var(--error,#ef4444)">${t('common.backendDownTitle')}</div>
       <div class="login-desc" style="line-height:1.8">
-        ClawPanel 后端服务未运行，无法获取真实数据。<br>
-        <span style="font-size:12px;color:var(--text-tertiary)">请在服务器上启动后端服务后刷新页面。</span>
+        ${t('common.backendDownDesc')}<br>
+        <span style="font-size:12px;color:var(--text-tertiary)">${t('common.backendDownHint')}</span>
       </div>
       <div style="background:var(--bg-tertiary);border-radius:var(--radius-md,8px);padding:14px 18px;margin:16px 0;text-align:left;font-family:var(--font-mono,monospace);font-size:12px;line-height:1.8;user-select:all;color:var(--text-secondary)">
-        <div style="color:var(--text-tertiary);margin-bottom:4px"># 开发模式</div>
+        <div style="color:var(--text-tertiary);margin-bottom:4px"># ${t('common.devMode')}</div>
         npm run dev<br>
-        <div style="color:var(--text-tertiary);margin-top:8px;margin-bottom:4px"># 生产模式</div>
+        <div style="color:var(--text-tertiary);margin-top:8px;margin-bottom:4px"># ${t('common.prodMode')}</div>
         npm run preview
       </div>
       <button class="login-btn" id="btn-backend-retry" style="margin-top:8px">
-        <span id="backend-retry-text">重新检测</span>
+        <span id="backend-retry-text">${t('common.checkAgain')}</span>
       </button>
       <div id="backend-retry-status" style="font-size:12px;color:var(--text-tertiary);margin-top:12px"></div>
       <div style="margin-top:16px;font-size:11px;color:#aaa">
@@ -115,19 +122,19 @@ function showBackendDownOverlay() {
     if (retrying) return
     retrying = true
     btn.disabled = true
-    textEl.textContent = '检测中...'
+    textEl.textContent = t('common.checking')
     statusEl.textContent = ''
 
     const ok = await checkBackendHealth()
     if (ok) {
-      statusEl.textContent = '后端已连接，正在加载...'
+      statusEl.textContent = t('common.backendConnectedLoading')
       statusEl.style.color = 'var(--success,#22c55e)'
       overlay.classList.add('hide')
       setTimeout(() => { overlay.remove(); location.reload() }, 600)
     } else {
-      statusEl.textContent = '后端仍未响应，请确认服务已启动'
+      statusEl.textContent = t('common.backendStillDown')
       statusEl.style.color = 'var(--error,#ef4444)'
-      textEl.textContent = '重新检测'
+      textEl.textContent = t('common.checkAgain')
       btn.disabled = false
       retrying = false
     }
@@ -140,7 +147,7 @@ function showBackendDownOverlay() {
     if (ok) {
       clearInterval(_backendRetryTimer)
       _backendRetryTimer = null
-      statusEl.textContent = '后端已连接，正在加载...'
+      statusEl.textContent = t('common.backendConnectedLoading')
       statusEl.style.color = 'var(--success,#22c55e)'
       overlay.classList.add('hide')
       setTimeout(() => { overlay.remove(); location.reload() }, 600)
@@ -162,28 +169,31 @@ function showLoginOverlay(defaultPw) {
   const overlay = document.createElement('div')
   overlay.id = 'login-overlay'
   let _captcha = _loginFailCount >= CAPTCHA_THRESHOLD ? _genCaptcha() : null
+  const securityLabel = t('sidebar.security')
+  const accessPasswordField = '<code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code>'
+  const resetPath = '<code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
   overlay.innerHTML = `
     <div class="login-card">
       ${_logoSvg}
       <div class="login-title">ClawPanel</div>
       <div class="login-desc">${hasDefault
-        ? '首次使用，默认密码已自动填充<br><span style="font-size:12px;color:#6366f1;font-weight:600">登录后请前往「安全设置」修改密码</span>'
-        : (isTauri ? '应用已锁定，请输入密码' : '请输入访问密码')}</div>
+        ? `${t('security.firstLoginHint')}<br><span style="font-size:12px;color:#6366f1;font-weight:600">${t('security.firstLoginChangeHint', { security: securityLabel })}</span>`
+        : (isTauri ? t('security.appLocked') : t('security.loginPrompt'))}</div>
       <form id="login-form">
-        <input class="login-input" type="${hasDefault ? 'text' : 'password'}" id="login-pw" placeholder="访问密码" autocomplete="current-password" autofocus value="${hasDefault ? defaultPw : ''}" />
+        <input class="login-input" type="${hasDefault ? 'text' : 'password'}" id="login-pw" placeholder="${t('security.accessPasswordPlaceholder')}" autocomplete="current-password" autofocus value="${hasDefault ? defaultPw : ''}" />
         <div id="login-captcha" style="display:${_captcha ? 'block' : 'none'};margin-bottom:10px">
-          <div style="font-size:12px;color:#888;margin-bottom:6px">请先完成验证：<strong id="captcha-q" style="color:var(--text-primary,#333)">${_captcha ? _captcha.q : ''}</strong></div>
-          <input class="login-input" type="number" id="login-captcha-input" placeholder="输入计算结果" style="text-align:center" />
+          <div style="font-size:12px;color:#888;margin-bottom:6px">${t('security.captchaPrompt')}<strong id="captcha-q" style="color:var(--text-primary,#333)">${_captcha ? _captcha.q : ''}</strong></div>
+          <input class="login-input" type="number" id="login-captcha-input" placeholder="${t('security.captchaPlaceholder')}" style="text-align:center" />
         </div>
-        <button class="login-btn" type="submit">登 录</button>
+        <button class="login-btn" type="submit">${t('security.loginAction')}</button>
         <div class="login-error" id="login-error"></div>
       </form>
       ${!hasDefault ? `<details class="login-forgot" style="margin-top:16px;text-align:center">
-        <summary style="font-size:11px;color:#aaa;cursor:pointer;list-style:none;user-select:none">忘记密码？</summary>
+        <summary style="font-size:11px;color:#aaa;cursor:pointer;list-style:none;user-select:none">${t('security.forgotPassword')}</summary>
         <div style="margin-top:8px;font-size:11px;color:#888;line-height:1.8;text-align:left;background:rgba(0,0,0,.03);border-radius:8px;padding:10px 14px">
           ${isTauri
-            ? '删除配置文件中的 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段即可重置：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
-            : '编辑服务器上的配置文件，删除 <code style="background:rgba(99,102,241,.1);padding:1px 5px;border-radius:3px;font-size:10px">accessPassword</code> 字段后重启服务：<br><code style="background:rgba(99,102,241,.1);padding:2px 6px;border-radius:3px;font-size:10px;word-break:break-all">~/.openclaw/clawpanel.json</code>'
+            ? `${t('security.resetPasswordLocal', { field: accessPasswordField })}<br>${resetPath}`
+            : `${t('security.resetPasswordRemote', { field: accessPasswordField })}<br>${resetPath}`
           }
         </div>
       </details>` : ''}
@@ -203,19 +213,19 @@ function showLoginOverlay(defaultPw) {
       const btn = overlay.querySelector('.login-btn')
       const errEl = overlay.querySelector('#login-error')
       btn.disabled = true
-      btn.textContent = '登录中...'
+      btn.textContent = t('security.loginSubmitting')
       errEl.textContent = ''
       // 验证码校验
       if (_captcha) {
         const captchaVal = parseInt(overlay.querySelector('#login-captcha-input')?.value)
         if (captchaVal !== _captcha.a) {
-          errEl.textContent = '验证码错误'
+          errEl.textContent = t('security.wrongCaptcha')
           _captcha = _genCaptcha()
           const qEl = overlay.querySelector('#captcha-q')
           if (qEl) qEl.textContent = _captcha.q
           overlay.querySelector('#login-captcha-input').value = ''
           btn.disabled = false
-          btn.textContent = '登 录'
+          btn.textContent = t('security.loginAction')
           return
         }
       }
@@ -231,9 +241,9 @@ function showLoginOverlay(defaultPw) {
               const cEl = overlay.querySelector('#login-captcha')
               if (cEl) { cEl.style.display = 'block'; cEl.querySelector('#captcha-q').textContent = _captcha.q }
             }
-            errEl.textContent = `密码错误${_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`}`
+            errEl.textContent = `${t('security.loginWrongPassword')}${_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`}`
             btn.disabled = false
-            btn.textContent = '登 录'
+            btn.textContent = t('security.loginAction')
             return
           }
           sessionStorage.setItem('clawpanel_authed', '1')
@@ -266,9 +276,9 @@ function showLoginOverlay(defaultPw) {
               const cEl = overlay.querySelector('#login-captcha')
               if (cEl) { cEl.style.display = 'block'; cEl.querySelector('#captcha-q').textContent = _captcha.q }
             }
-            errEl.textContent = (data.error || '登录失败') + (_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`)
+            errEl.textContent = (data.error || t('security.loginFailed')) + (_loginFailCount >= CAPTCHA_THRESHOLD ? '' : ` (${_loginFailCount}/${CAPTCHA_THRESHOLD})`)
             btn.disabled = false
-            btn.textContent = '登 录'
+            btn.textContent = t('security.loginAction')
             return
           }
           overlay.classList.add('hide')
@@ -279,9 +289,9 @@ function showLoginOverlay(defaultPw) {
           resolve()
         }
       } catch (err) {
-        errEl.textContent = '网络错误: ' + (err.message || err)
+        errEl.textContent = `${t('common.networkError')}: ${err.message || err}`
         btn.disabled = false
-        btn.textContent = '登 录'
+        btn.textContent = t('security.loginAction')
       }
     })
   })
@@ -306,6 +316,7 @@ async function boot() {
   registerRoute('/logs', () => import('./pages/logs.js'))
   registerRoute('/models', () => import('./pages/models.js'))
   registerRoute('/agents', () => import('./pages/agents.js'))
+  registerRoute('/agent-detail', () => import('./pages/agent-detail.js'))
   registerRoute('/gateway', () => import('./pages/gateway.js'))
   registerRoute('/memory', () => import('./pages/memory.js'))
   registerRoute('/skills', () => import('./pages/skills.js'))
@@ -349,8 +360,8 @@ async function boot() {
     banner.id = 'pw-change-banner'
     banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:999;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;padding:10px 20px;display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;font-weight:500;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
     banner.innerHTML = `
-      <span>${statusIcon('warn', 14)} 当前使用的是系统生成的默认密码，为了安全请尽快修改</span>
-      <a href="#/security" style="color:#fff;background:rgba(255,255,255,0.2);padding:4px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600" onclick="document.getElementById('pw-change-banner').remove();sessionStorage.removeItem('clawpanel_must_change_pw')">前往安全设置</a>
+      <span>${statusIcon('warn', 14)} ${t('common.defaultPasswordBanner')}</span>
+      <a href="#/security" style="color:#fff;background:rgba(255,255,255,0.2);padding:4px 14px;border-radius:6px;text-decoration:none;font-size:12px;font-weight:600" onclick="document.getElementById('pw-change-banner').remove();sessionStorage.removeItem('clawpanel_must_change_pw')">${t('common.goSecurity')}</a>
       <button onclick="this.parentElement.remove()" style="background:none;border:none;color:rgba(255,255,255,0.7);cursor:pointer;font-size:16px;padding:0 4px;margin-left:4px">✕</button>
     `
     document.body.prepend(banner)
@@ -523,10 +534,10 @@ function setupGatewayBanner() {
       banner.innerHTML = `
         <div class="gw-banner-content">
           <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
-          <span>Gateway 未运行</span>
-          <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">启动</button>
-          <a class="btn btn-sm btn-ghost" href="#/services">服务管理</a>
-          <button class="gw-banner-close" id="btn-gw-dismiss" title="关闭提示">&times;</button>
+          <span>${t('dashboard.controlUINotRunning')}</span>
+          <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">${t('dashboard.startBtn')}</button>
+          <a class="btn btn-sm btn-ghost" href="#/services">${t('sidebar.services')}</a>
+          <button class="gw-banner-close" id="btn-gw-dismiss" title="${t('common.close')}">&times;</button>
         </div>
       `
       banner.querySelector('#btn-gw-dismiss')?.addEventListener('click', () => {
@@ -537,18 +548,23 @@ function setupGatewayBanner() {
         const btn = e.target
         btn.disabled = true
         btn.classList.add('btn-loading')
-        btn.textContent = '启动中...'
+        btn.textContent = t('dashboard.starting')
         try {
           await api.startService('ai.openclaw.gateway')
         } catch (err) {
+          if (isForeignGatewayError(err)) {
+            await openGatewayConflict(err)
+            update(false)
+            return
+          }
           const errMsg = (err.message || String(err)).slice(0, 120)
           banner.innerHTML = `
             <div class="gw-banner-content" style="flex-wrap:wrap">
               <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
-              <span>启动失败</span>
-              <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">重试</button>
-              <a class="btn btn-sm btn-ghost" href="#/services">服务管理</a>
-              <a class="btn btn-sm btn-ghost" href="#/logs">查看日志</a>
+              <span>${t('dashboard.startFail')}</span>
+              <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">${t('dashboard.retry')}</button>
+              <a class="btn btn-sm btn-ghost" href="#/services">${t('sidebar.services')}</a>
+              <a class="btn btn-sm btn-ghost" href="#/logs">${t('sidebar.logs')}</a>
             </div>
             <div style="font-size:11px;opacity:0.7;margin-top:4px;font-family:monospace;word-break:break-all">${escapeHtml(errMsg)}</div>
           `
@@ -564,7 +580,7 @@ function setupGatewayBanner() {
             if (gw?.running) { update(true); return }
           } catch {}
           const sec = Math.floor((Date.now() - t0) / 1000)
-          btn.textContent = `启动中... ${sec}s`
+          btn.textContent = `${t('dashboard.starting')} ${sec}s`
           await new Promise(r => setTimeout(r, 1500))
         }
         // 超时后尝试获取日志帮助排查
@@ -576,9 +592,9 @@ function setupGatewayBanner() {
         banner.innerHTML = `
           <div class="gw-banner-content">
             <span class="gw-banner-icon">${statusIcon('info', 16)}</span>
-            <span>启动超时，Gateway 可能仍在启动中</span>
-            <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">重试</button>
-            <a class="btn btn-sm btn-ghost" href="#/logs">查看日志</a>
+            <span>${t('dashboard.startTimeout')}</span>
+            <button class="btn btn-sm btn-secondary" id="btn-gw-start" style="margin-left:auto">${t('dashboard.retry')}</button>
+            <a class="btn btn-sm btn-ghost" href="#/logs">${t('sidebar.logs')}</a>
           </div>
           ${logHint}
         `
@@ -643,7 +659,8 @@ function showGuardianRecovery() {
         try {
           await api.startService('ai.openclaw.gateway')
           statusEl.innerHTML = `<span style="color:var(--success)">${t('dashboard.fixDoneRestarted')}</span>`
-        } catch {
+        } catch (err) {
+          if (isForeignGatewayError(err)) await openGatewayConflict(err)
           statusEl.innerHTML = `<span style="color:var(--warning)">${t('dashboard.fixDoneRestartFail')}</span>`
         }
       }
@@ -664,6 +681,7 @@ function showGuardianRecovery() {
       await api.startService('ai.openclaw.gateway')
       btn.textContent = t('dashboard.startSent')
     } catch (err) {
+      if (isForeignGatewayError(err)) await openGatewayConflict(err)
       btn.textContent = t('dashboard.retryStart')
       btn.disabled = false
     }
@@ -701,16 +719,16 @@ async function checkGlobalUpdate() {
       <div class="update-banner-content">
         <div class="update-banner-text">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-          <span class="update-banner-ver">ClawPanel v${ver} 可用</span>
+          <span class="update-banner-ver">${t('about.versionAvailable', { version: ver })}</span>
           ${changelog ? `<span class="update-banner-changelog">· ${changelog}</span>` : ''}
         </div>
         ${isWeb
-          ? `<button class="btn btn-sm" id="btn-update-show-cmd">更新方法</button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">Release Notes</a>`
-          : `<button class="btn btn-sm" id="btn-update-hot">热更新</button>
-             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">完整安装包</a>`
+          ? `<button class="btn btn-sm" id="btn-update-show-cmd">${t('about.updateMethod')}</button>
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">${t('about.releaseNotes')}</a>`
+          : `<button class="btn btn-sm" id="btn-update-hot">${t('about.hotUpdate')}</button>
+             <a class="btn btn-sm" href="https://github.com/qingchencloud/clawpanel/releases" target="_blank" rel="noopener">${t('about.fullInstaller')}</a>`
         }
-        <button class="update-banner-close" id="btn-update-dismiss" title="忽略此版本">✕</button>
+        <button class="update-banner-close" id="btn-update-dismiss" title="${t('about.dismissVersion')}">✕</button>
       </div>
     `
 
@@ -726,21 +744,20 @@ async function checkGlobalUpdate() {
       overlay.className = 'modal-overlay'
       overlay.innerHTML = `
         <div class="modal" style="max-width:480px">
-          <div class="modal-title">更新到 v${ver}</div>
+          <div class="modal-title">${t('about.updateToVersion', { version: ver })}</div>
           <div style="font-size:var(--font-size-sm);line-height:1.8">
-            <p style="margin-bottom:12px">在服务器上执行以下命令：</p>
+            <p style="margin-bottom:12px">${t('about.runOnServer')}</p>
             <pre style="background:var(--bg-tertiary);padding:12px 16px;border-radius:var(--radius-md);font-family:var(--font-mono);font-size:var(--font-size-xs);overflow-x:auto;white-space:pre-wrap;user-select:all">cd /opt/clawpanel
 git pull origin main
 npm install
 npm run build
 sudo systemctl restart clawpanel</pre>
             <p style="margin-top:12px;color:var(--text-tertiary);font-size:var(--font-size-xs)">
-              如果 git pull 失败，可先执行 <code style="background:var(--bg-tertiary);padding:2px 6px;border-radius:4px">git checkout -- .</code> 丢弃本地修改。<br>
-              路径请替换为实际的 ClawPanel 安装目录。
+              ${t('about.updateCommandHint')}
             </p>
           </div>
           <div class="modal-actions">
-            <button class="btn btn-secondary btn-sm" data-action="close">关闭</button>
+            <button class="btn btn-secondary btn-sm" data-action="close">${t('common.close')}</button>
           </div>
         </div>
       `
@@ -755,18 +772,18 @@ sudo systemctl restart clawpanel</pre>
       const btn = banner.querySelector('#btn-update-hot')
       if (!btn) return
       btn.disabled = true
-      btn.textContent = '下载中...'
+      btn.textContent = t('about.downloading')
       try {
         await api.downloadFrontendUpdate(info.manifest?.url || '', info.manifest?.hash || '')
         localStorage.setItem('clawpanel_hot_update_applied', ver)
-        btn.textContent = '重载应用'
+        btn.textContent = t('about.reloadApp')
         btn.disabled = false
         btn.onclick = () => window.location.reload()
       } catch (e) {
-        btn.textContent = '下载失败'
+        btn.textContent = t('about.downloadFailedShort')
         btn.disabled = false
         const { toast } = await import('./components/toast.js')
-        toast('更新下载失败: ' + (e.message || e), 'error')
+        toast(t('about.downloadFailed') + (e.message || e), 'error')
       }
     })
   } catch {
@@ -803,10 +820,10 @@ function startUpdateChecker() {
     if (app) app.innerHTML = `
       <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:20px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
         <div style="font-size:48px;margin-bottom:16px">⚠️</div>
-        <div style="font-size:18px;font-weight:600;margin-bottom:8px;color:#18181b">页面加载失败</div>
+        <div style="font-size:18px;font-weight:600;margin-bottom:8px;color:#18181b">${t('common.pageLoadFailed')}</div>
         <div style="font-size:13px;color:#71717a;max-width:400px;line-height:1.6;margin-bottom:16px">${String(bootErr?.message || bootErr).replace(/</g,'&lt;')}</div>
-        <button onclick="location.reload()" style="padding:8px 20px;border-radius:8px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer">刷新重试</button>
-        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">如果问题持续出现，请尝试重新安装 ClawPanel<br>或在 <a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a> 反馈</div>
+        <button onclick="location.reload()" style="padding:8px 20px;border-radius:8px;border:none;background:#6366f1;color:#fff;font-size:13px;cursor:pointer">${t('common.reloadRetry')}</button>
+        <div style="margin-top:24px;font-size:11px;color:#a1a1aa">${t('common.pageLoadFailedHint')}<br><a href="https://github.com/qingchencloud/clawpanel/issues" target="_blank" style="color:#6366f1">GitHub Issues</a></div>
       </div>`
   }
   startUpdateChecker()

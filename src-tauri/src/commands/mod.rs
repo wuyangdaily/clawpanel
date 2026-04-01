@@ -1,5 +1,9 @@
 use std::net::IpAddr;
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
+#[cfg(target_os = "windows")]
+use std::process::Command;
 use std::sync::RwLock;
 use std::time::Duration;
 
@@ -27,20 +31,55 @@ fn default_openclaw_dir() -> PathBuf {
     dirs::home_dir().unwrap_or_default().join(".openclaw")
 }
 
+fn normalize_custom_openclaw_dir(raw: &str) -> Option<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let expanded = if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
+        dirs::home_dir().unwrap_or_default().join(rest)
+    } else {
+        PathBuf::from(trimmed)
+    };
+
+    if expanded.is_absolute() {
+        Some(expanded)
+    } else {
+        std::env::current_dir().ok().map(|cwd| cwd.join(expanded))
+    }
+}
+
+pub fn openclaw_search_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Some(value) = read_panel_config_value() else {
+        return paths;
+    };
+    let Some(entries) = value.get("openclawSearchPaths").and_then(|v| v.as_array()) else {
+        return paths;
+    };
+
+    for raw in entries.iter().filter_map(|v| v.as_str()) {
+        if let Some(path) = normalize_custom_openclaw_dir(raw) {
+            if !paths.iter().any(|p| p == &path) {
+                paths.push(path);
+            }
+        }
+    }
+    paths
+}
+
 /// 获取 OpenClaw 配置目录
 /// 优先使用 clawpanel.json 中的 openclawDir 自定义路径，不存在则回退默认 ~/.openclaw
 pub fn openclaw_dir() -> PathBuf {
-    // 直接读 clawpanel.json（始终在默认目录下），避免循环依赖
-    let config_path = default_openclaw_dir().join("clawpanel.json");
-    if let Ok(content) = std::fs::read_to_string(&config_path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(custom) = v.get("openclawDir").and_then(|d| d.as_str()) {
-                let p = PathBuf::from(custom);
-                if !custom.is_empty() && p.exists() {
-                    return p;
-                }
-            }
-        }
+    if let Some(custom) = read_panel_config_value()
+        .and_then(|v| v.get("openclawDir")?.as_str().map(String::from))
+        .and_then(|v| normalize_custom_openclaw_dir(&v))
+    {
+        return custom;
     }
     default_openclaw_dir()
 }
@@ -83,6 +122,31 @@ fn read_gateway_port_from_config() -> u16 {
 fn panel_config_path() -> PathBuf {
     // ClawPanel 自身配置始终在默认目录，不随 openclawDir 变化
     default_openclaw_dir().join("clawpanel.json")
+}
+
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_npm_global_prefix() -> Option<String> {
+    if let Ok(prefix) = std::env::var("NPM_CONFIG_PREFIX") {
+        let trimmed = prefix.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/d", "/s", "/c", "npm config get prefix"]);
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    if let Ok(output) = cmd.output() {
+        if output.status.success() {
+            let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !prefix.is_empty() && prefix.to_lowercase() != "undefined" {
+                return Some(prefix);
+            }
+        }
+    }
+
+    None
 }
 
 pub fn read_panel_config_value() -> Option<serde_json::Value> {
@@ -231,16 +295,8 @@ fn build_enhanced_path() -> String {
     let home = dirs::home_dir().unwrap_or_default();
 
     // 读取用户保存的自定义 Node.js 路径
-    let custom_path = openclaw_dir()
-        .join("clawpanel.json")
-        .exists()
-        .then(|| {
-            std::fs::read_to_string(openclaw_dir().join("clawpanel.json"))
-                .ok()
-                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                .and_then(|v| v.get("nodePath")?.as_str().map(String::from))
-        })
-        .flatten();
+    let custom_path = read_panel_config_value()
+        .and_then(|v| v.get("nodePath")?.as_str().map(String::from));
 
     #[cfg(target_os = "macos")]
     {
@@ -254,6 +310,18 @@ fn build_enhanced_path() -> String {
             "/usr/local/bin".into(),
             "/opt/homebrew/bin".into(),
         ];
+        for configured in openclaw_search_paths() {
+            let dir = if configured.is_file() {
+                configured.parent().map(|p| p.to_path_buf())
+            } else {
+                Some(configured)
+            };
+            if let Some(dir) = dir {
+                if dir.is_dir() {
+                    extra.push(dir.to_string_lossy().to_string());
+                }
+            }
+        }
         // NPM_CONFIG_PREFIX: 用户通过 npm config set prefix 自定义的全局安装路径
         if let Ok(prefix) = std::env::var("NPM_CONFIG_PREFIX") {
             extra.push(format!("{}/bin", prefix));
@@ -326,6 +394,18 @@ fn build_enhanced_path() -> String {
             "/usr/bin".into(),
             "/snap/bin".into(),
         ];
+        for configured in openclaw_search_paths() {
+            let dir = if configured.is_file() {
+                configured.parent().map(|p| p.to_path_buf())
+            } else {
+                Some(configured)
+            };
+            if let Some(dir) = dir {
+                if dir.is_dir() {
+                    extra.push(dir.to_string_lossy().to_string());
+                }
+            }
+        }
         // NPM_CONFIG_PREFIX: 用户通过 npm config set prefix 自定义的全局安装路径
         if let Ok(prefix) = std::env::var("NPM_CONFIG_PREFIX") {
             extra.push(format!("{}/bin", prefix));
@@ -410,6 +490,19 @@ fn build_enhanced_path() -> String {
 
         // 版本管理器路径优先，确保 nvm/volta/fnm 管理的 Node.js 被优先检测到
         let mut extra: Vec<String> = vec![];
+
+        for configured in openclaw_search_paths() {
+            let dir = if configured.is_file() {
+                configured.parent().map(|p| p.to_path_buf())
+            } else {
+                Some(configured)
+            };
+            if let Some(dir) = dir {
+                if dir.is_dir() {
+                    extra.push(dir.to_string_lossy().to_string());
+                }
+            }
+        }
 
         // 1. NVM_SYMLINK（nvm-windows 活跃版本符号链接，如 D:\nodejs）—— 最高优先级
         // 增强：尝试解析符号链接目标
@@ -545,6 +638,15 @@ fn build_enhanced_path() -> String {
         // 6. npm 全局（openclaw.cmd 通常在这里）
         if !appdata.is_empty() {
             extra.push(format!(r"{}\npm", appdata));
+        }
+        if let Some(prefix) = windows_npm_global_prefix() {
+            let prefix_path = std::path::Path::new(&prefix);
+            if prefix_path.is_dir() {
+                let prefix_str = prefix_path.to_string_lossy().to_string();
+                if !extra.contains(&prefix_str) {
+                    extra.push(prefix_str);
+                }
+            }
         }
 
         // 6.5 standalone 安装目录（集中管理，避免多处硬编码）

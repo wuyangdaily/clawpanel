@@ -1,6 +1,11 @@
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
+ pub fn is_rejected_cli_path(cli_path: &str) -> bool {
+     let lower = cli_path.replace('\\', "/").to_lowercase();
+     lower.contains("/.cherrystudio/") || lower.contains("cherry-studio")
+ }
+
 /// 读取 clawpanel.json 中用户绑定的 CLI 路径
 fn bound_cli_path() -> Option<std::path::PathBuf> {
     let config = crate::commands::read_panel_config_value()?;
@@ -9,11 +14,35 @@ fn bound_cli_path() -> Option<std::path::PathBuf> {
         return None;
     }
     let p = std::path::PathBuf::from(raw);
-    if p.exists() {
+    if p.exists() && !is_rejected_cli_path(&p.to_string_lossy()) {
         Some(p)
     } else {
         None
     }
+}
+
+fn apply_openclaw_dir_env(cmd: &mut std::process::Command) {
+    let openclaw_dir = crate::commands::openclaw_dir();
+    let config_path = openclaw_dir.join("openclaw.json");
+    cmd.env("OPENCLAW_HOME", &openclaw_dir);
+    cmd.env("OPENCLAW_STATE_DIR", &openclaw_dir);
+    cmd.env("OPENCLAW_CONFIG_PATH", &config_path);
+}
+
+fn apply_openclaw_dir_env_tokio(cmd: &mut tokio::process::Command) {
+    let openclaw_dir = crate::commands::openclaw_dir();
+    let config_path = openclaw_dir.join("openclaw.json");
+    cmd.env("OPENCLAW_HOME", &openclaw_dir);
+    cmd.env("OPENCLAW_STATE_DIR", &openclaw_dir);
+    cmd.env("OPENCLAW_CONFIG_PATH", &config_path);
+}
+
+fn configured_cli_candidates() -> Vec<std::path::PathBuf> {
+    crate::commands::openclaw_search_paths()
+        .into_iter()
+        .filter_map(|p| crate::commands::config::resolve_openclaw_cli_input_path(&p))
+        .filter(|p| !is_rejected_cli_path(&p.to_string_lossy()))
+        .collect()
 }
 
 /// Windows: 在 PATH 中查找 openclaw.cmd 的完整路径
@@ -25,10 +54,15 @@ fn find_openclaw_cmd() -> Option<std::path::PathBuf> {
     if let Some(bound) = bound_cli_path() {
         return Some(bound);
     }
+    for candidate in configured_cli_candidates() {
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
     let path = crate::commands::enhanced_path();
     for dir in path.split(';') {
         let candidate = std::path::Path::new(dir).join("openclaw.cmd");
-        if candidate.exists() {
+        if candidate.exists() && !is_rejected_cli_path(&candidate.to_string_lossy()) {
             return Some(candidate);
         }
     }
@@ -58,12 +92,17 @@ pub fn resolve_openclaw_cli_path() -> Option<String> {
     if let Some(bound) = bound_cli_path() {
         return Some(bound.to_string_lossy().to_string());
     }
+    for candidate in configured_cli_candidates() {
+        if candidate.exists() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
     #[cfg(target_os = "windows")]
     {
         let path = crate::commands::enhanced_path();
         for dir in path.split(';') {
             let candidate = std::path::Path::new(dir).join("openclaw.cmd");
-            if candidate.exists() {
+            if candidate.exists() && !is_rejected_cli_path(&candidate.to_string_lossy()) {
                 return Some(candidate.to_string_lossy().to_string());
             }
         }
@@ -125,6 +164,7 @@ pub fn openclaw_command() -> std::process::Command {
             let mut cmd = std::process::Command::new("cmd");
             cmd.arg("/c").arg(cmd_path);
             cmd.env("PATH", &enhanced);
+            apply_openclaw_dir_env(&mut cmd);
             crate::commands::apply_proxy_env(&mut cmd);
             cmd.creation_flags(CREATE_NO_WINDOW);
             return cmd;
@@ -133,17 +173,18 @@ pub fn openclaw_command() -> std::process::Command {
         let mut cmd = std::process::Command::new("cmd");
         cmd.arg("/c").arg("openclaw");
         cmd.env("PATH", &enhanced);
+        apply_openclaw_dir_env(&mut cmd);
         crate::commands::apply_proxy_env(&mut cmd);
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let bin = bound_cli_path()
-            .map(|p| p.to_string_lossy().to_string())
+        let bin = resolve_openclaw_cli_path()
             .unwrap_or_else(|| "openclaw".into());
         let mut cmd = std::process::Command::new(bin);
         cmd.env("PATH", crate::commands::enhanced_path());
+        apply_openclaw_dir_env(&mut cmd);
         crate::commands::apply_proxy_env(&mut cmd);
         cmd
     }
@@ -160,6 +201,7 @@ pub fn openclaw_command_async() -> tokio::process::Command {
             let mut cmd = tokio::process::Command::new("cmd");
             cmd.arg("/c").arg(cmd_path);
             cmd.env("PATH", &enhanced);
+            apply_openclaw_dir_env_tokio(&mut cmd);
             crate::commands::apply_proxy_env_tokio(&mut cmd);
             cmd.creation_flags(CREATE_NO_WINDOW);
             return cmd;
@@ -168,17 +210,18 @@ pub fn openclaw_command_async() -> tokio::process::Command {
         let mut cmd = tokio::process::Command::new("cmd");
         cmd.arg("/c").arg("openclaw");
         cmd.env("PATH", &enhanced);
+        apply_openclaw_dir_env_tokio(&mut cmd);
         crate::commands::apply_proxy_env_tokio(&mut cmd);
         cmd.creation_flags(CREATE_NO_WINDOW);
         cmd
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let bin = bound_cli_path()
-            .map(|p| p.to_string_lossy().to_string())
+        let bin = resolve_openclaw_cli_path()
             .unwrap_or_else(|| "openclaw".into());
         let mut cmd = tokio::process::Command::new(bin);
         cmd.env("PATH", crate::commands::enhanced_path());
+        apply_openclaw_dir_env_tokio(&mut cmd);
         crate::commands::apply_proxy_env_tokio(&mut cmd);
         cmd
     }

@@ -50,7 +50,7 @@ async function apiCall(cmd, args = {}) {
       await api.writePanelConfig(cfg)
       return { success: true }
     }
-    throw new Error('未知命令: ' + cmd)
+    throw new Error(`${t('common.unknownCommand')}: ${cmd}`)
   }
   // Web 模式
   const resp = await fetch(`/__api/${cmd}`, {

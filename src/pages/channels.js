@@ -838,7 +838,7 @@ function renderAgentBindings(page, state) {
       const yes = await showConfirm(t('channels.confirmRemoveBinding', { agent: aid, summary: formatBindingMatchSummary(binding) }))
       if (!yes) return
       try {
-        await api.deleteAgentBinding(aid, ch, acct)
+        await api.deleteAgentBinding(aid, ch, acct, match)
         toast(t('channels.bindingRemoved'), 'success')
         await loadPlatforms(page, state)
       } catch (e) {
@@ -1326,11 +1326,11 @@ async function openConfigDialog(pid, page, state, accountId) {
           const parts = []
           const installBtn = modal.querySelector('[data-channel-action="install"]')
           if (s.installed && s.compatible === false) {
-            parts.push(`<span style="color:var(--error);font-weight:600">⚠ ${t('channels.pluginIncompatible') || '插件版本不兼容'}</span>`)
+            parts.push(`<span style="color:var(--error);font-weight:600">⚠ ${t('channels.pluginIncompatible')}</span>`)
             parts.push(`${t('channels.version')} <strong>${s.installedVersion || '?'}</strong>`)
-            parts.push(`<br><span style="color:var(--error);font-size:var(--font-size-xs)">${s.compatError || '请点击「一键安装插件」重新安装兼容版本'}</span>`)
+            parts.push(`<br><span style="color:var(--error);font-size:var(--font-size-xs)">${s.compatError || t('channels.pluginCompatErrorHint')}</span>`)
             if (installBtn) {
-              installBtn.textContent = t('channels.reinstallCompatible') || '重新安装兼容版本'
+              installBtn.textContent = t('channels.reinstallCompatible')
               installBtn.style.background = 'var(--error)'
             }
           } else if (s.installed) {
@@ -1386,7 +1386,7 @@ async function openConfigDialog(pid, page, state, accountId) {
             const hint = document.createElement('div')
             hint.style.cssText = 'color:var(--text-tertiary);font-style:italic'
             hint.id = 'action-loading-hint'
-            hint.textContent = t('channels.downloadingPlugin') || '正在下载，请稍候（首次安装可能需要几分钟）...'
+            hint.textContent = t('channels.downloadingPlugin')
             logBox.appendChild(hint)
           }
           const _qrBuf = []
@@ -1451,7 +1451,7 @@ async function openConfigDialog(pid, page, state, accountId) {
                 wrap.innerHTML = `
                   <div style="font-size:var(--font-size-sm);font-weight:600;color:#000;margin-bottom:8px">${t('channels.weixinScanQr')}</div>
                   <img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrUrl)}" alt="WeChat QR" style="width:200px;height:200px;image-rendering:pixelated;border-radius:4px;margin:0 auto;display:block" loading="eager">
-                  <div style="margin-top:8px"><a href="${escapeAttr(qrUrl)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:var(--font-size-xs);word-break:break-all">${t('channels.weixinOpenInBrowser') || '或点击此链接在浏览器中打开'}</a></div>
+                  <div style="margin-top:8px"><a href="${escapeAttr(qrUrl)}" target="_blank" rel="noopener" style="color:var(--accent);font-size:var(--font-size-xs);word-break:break-all">${t('channels.weixinOpenInBrowser')}</a></div>
                 `
                 logBox.appendChild(wrap)
               } else if (msg.trim()) {

@@ -4,6 +4,8 @@
  * 自动注入当前页面上下文到 AI 助手会话
  */
 
+import { t } from '../lib/i18n.js'
+
 const BOT_ICON = '<svg viewBox="0 0 24 24"><path d="M12 8V4H8"/><rect x="5" y="8" width="14" height="12" rx="2"/><path d="M9 13h0"/><path d="M15 13h0"/><path d="M10 17h4"/></svg>'
 
 const POS_KEY = 'clawpanel-fab-pos'
@@ -41,7 +43,7 @@ export function initAIFab() {
 export function openAIDrawerWithError(errorCtx) {
   sessionStorage.setItem('assistant-error-context', JSON.stringify({
     scene: errorCtx.scene || '',
-    title: errorCtx.title || '操作失败',
+    title: errorCtx.title || t('common.operationFailed'),
     hint: errorCtx.hint || '',
     error: truncate(errorCtx.error || '', 3000),
     ts: Date.now(),
@@ -53,7 +55,7 @@ export function openAIDrawerWithError(errorCtx) {
       _fab.el.classList.add('has-error')
     } else {
       import('./toast.js')
-        .then(({ toast }) => toast('已保存诊断上下文，可从侧边栏进入「晴辰助手」继续处理', 'info'))
+        .then(({ toast }) => toast(t('assistant.contextSavedToast', { assistant: t('sidebar.assistant') }), 'info'))
         .catch(() => {})
     }
   } else {
@@ -71,7 +73,7 @@ function truncate(str, max) {
 function createFab() {
   const fab = document.createElement('button')
   fab.className = 'ai-fab'
-  fab.title = 'AI 助手'
+  fab.title = t('sidebar.assistant')
   fab.innerHTML = BOT_ICON
   document.body.appendChild(fab)
 
@@ -228,7 +230,7 @@ function showDragHintOnce(el) {
   if (!el || localStorage.getItem(HINT_KEY)) return
   const tip = document.createElement('div')
   tip.className = 'ai-fab-hint'
-  tip.textContent = '长按可拖动'
+  tip.textContent = t('assistant.dragHint')
   el.appendChild(tip)
   localStorage.setItem(HINT_KEY, '1')
   setTimeout(() => tip.remove(), 4000)

@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::models::types::ServiceStatus;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 
 /// OpenClaw 官方服务的友好名称映射
@@ -55,6 +55,161 @@ struct GuardianEventPayload {
     kind: String,
     auto_restart_count: u32,
     message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GatewayOwnerRecord {
+    pid: Option<u32>,
+    port: u16,
+    cli_path: Option<String>,
+    openclaw_dir: String,
+    started_at: String,
+    started_by: String,
+}
+
+fn normalize_owned_path(path: impl AsRef<std::path::Path>) -> String {
+    let path_ref = path.as_ref();
+    path_ref
+        .canonicalize()
+        .unwrap_or_else(|_| path_ref.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn gateway_owner_path() -> std::path::PathBuf {
+    crate::commands::openclaw_dir().join("gateway-owner.json")
+}
+
+fn current_gateway_owner_signature() -> (u16, String, Option<String>) {
+    let openclaw_dir = normalize_owned_path(crate::commands::openclaw_dir());
+    let cli_path = crate::utils::resolve_openclaw_cli_path()
+        .map(|p| normalize_owned_path(std::path::PathBuf::from(p)));
+    (crate::commands::gateway_listen_port(), openclaw_dir, cli_path)
+}
+
+fn read_gateway_owner() -> Option<GatewayOwnerRecord> {
+    let content = std::fs::read_to_string(gateway_owner_path()).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+fn write_gateway_owner(pid: Option<u32>) -> Result<(), String> {
+    let owner_path = gateway_owner_path();
+    if let Some(parent) = owner_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("创建 Gateway owner 目录失败: {e}"))?;
+    }
+    let (port, openclaw_dir, cli_path) = current_gateway_owner_signature();
+    let record = GatewayOwnerRecord {
+        pid,
+        port,
+        cli_path,
+        openclaw_dir,
+        started_at: chrono::Local::now().to_rfc3339(),
+        started_by: "clawpanel".into(),
+    };
+    let content = serde_json::to_string_pretty(&record)
+        .map_err(|e| format!("序列化 Gateway owner 失败: {e}"))?;
+    std::fs::write(owner_path, content).map_err(|e| format!("写入 Gateway owner 失败: {e}"))
+}
+
+fn clear_gateway_owner() {
+    let _ = std::fs::remove_file(gateway_owner_path());
+}
+
+fn is_current_gateway_owner(owner: &GatewayOwnerRecord, pid: Option<u32>) -> bool {
+    if owner.started_by != "clawpanel" {
+        return false;
+    }
+    let (port, openclaw_dir, cli_path) = current_gateway_owner_signature();
+    if owner.port != port {
+        return false;
+    }
+    if normalize_owned_path(&owner.openclaw_dir) != openclaw_dir {
+        return false;
+    }
+    let owner_cli_path = owner.cli_path.as_ref().map(normalize_owned_path);
+    match (owner_cli_path.as_deref(), cli_path.as_deref()) {
+        (Some(owner_cli), Some(current_cli)) if owner_cli == current_cli => {}
+        _ => return false,
+    }
+    if let (Some(owner_pid), Some(current_pid)) = (owner.pid, pid) {
+        if owner_pid != current_pid {
+            return false;
+        }
+    }
+    true
+}
+
+fn is_gateway_owned_by_current_instance(pid: Option<u32>) -> bool {
+    read_gateway_owner()
+        .as_ref()
+        .map(|owner| is_current_gateway_owner(owner, pid))
+        .unwrap_or(false)
+}
+
+fn foreign_gateway_error(pid: Option<u32>) -> String {
+    let pid_suffix = pid
+        .map(|value| format!(" (PID: {value})"))
+        .unwrap_or_default();
+    format!(
+        "检测到端口 {} 上已有其他 OpenClaw Gateway 正在运行{}，且不属于当前面板实例。为避免误接管，请先关闭该实例，或将当前 CLI/目录绑定到它对应的安装。",
+        crate::commands::gateway_listen_port(),
+        pid_suffix
+    )
+}
+
+fn ensure_owned_gateway_or_err(pid: Option<u32>) -> Result<(), String> {
+    if is_gateway_owned_by_current_instance(pid) {
+        Ok(())
+    } else {
+        Err(foreign_gateway_error(pid))
+    }
+}
+
+async fn current_gateway_runtime(label: &str) -> (bool, Option<u32>) {
+    #[cfg(target_os = "windows")]
+    {
+        platform::check_service_status(0, label)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        platform::check_service_status(0, label)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        platform::check_service_status(0, label).await
+    }
+}
+
+async fn wait_for_gateway_running(label: &str, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let (running, pid) = current_gateway_runtime(label).await;
+        if running {
+            write_gateway_owner(pid)?;
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    Err(format!(
+        "Gateway 启动超时，请查看 {}",
+        crate::commands::openclaw_dir()
+            .join("logs")
+            .join("gateway.err.log")
+            .display()
+    ))
+}
+
+async fn wait_for_gateway_stopped(label: &str, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let (running, _) = current_gateway_runtime(label).await;
+        if !running {
+            clear_gateway_owner();
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    Err("Gateway 停止超时，请手动检查进程".into())
 }
 
 static GUARDIAN_STATE: OnceLock<Arc<Mutex<GuardianRuntimeState>>> = OnceLock::new();
@@ -262,34 +417,30 @@ async fn guardian_tick(app: &tauri::AppHandle) {
 async fn start_service_impl_internal(label: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        platform::start_service_impl(label)
+        platform::start_service_impl(label)?;
     }
     #[cfg(not(target_os = "macos"))]
     {
-        platform::start_service_impl(label).await
+        platform::start_service_impl(label).await?;
     }
+    wait_for_gateway_running(label, Duration::from_secs(15)).await
 }
 
 async fn stop_service_impl_internal(label: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        platform::stop_service_impl(label)
+        platform::stop_service_impl(label)?;
     }
     #[cfg(not(target_os = "macos"))]
     {
-        platform::stop_service_impl(label).await
+        platform::stop_service_impl(label).await?;
     }
+    wait_for_gateway_stopped(label, Duration::from_secs(10)).await
 }
 
 async fn restart_service_impl_internal(label: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        platform::restart_service_impl(label)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        platform::restart_service_impl(label).await
-    }
+    stop_service_impl_internal(label).await?;
+    start_service_impl_internal(label).await
 }
 
 pub fn start_backend_guardian(app: tauri::AppHandle) {
@@ -427,8 +578,6 @@ mod platform {
             }
         }
 
-        let enhanced = crate::commands::enhanced_path();
-
         let log_dir = crate::commands::openclaw_dir().join("logs");
         fs::create_dir_all(&log_dir).ok();
 
@@ -444,13 +593,11 @@ mod platform {
             .open(log_dir.join("gateway.err.log"))
             .map_err(|e| format!("创建错误日志文件失败: {e}"))?;
 
-        let mut cmd = Command::new("openclaw");
+        let mut cmd = crate::utils::openclaw_command();
         cmd.arg("gateway")
-            .env("PATH", &enhanced)
             .stdin(std::process::Stdio::null())
             .stdout(stdout_log)
             .stderr(stderr_log);
-        crate::commands::apply_proxy_env(&mut cmd);
         cmd.spawn().map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 "OpenClaw CLI 未找到，请确认已安装并重启 ClawPanel。".to_string()
@@ -478,7 +625,10 @@ mod platform {
             }
         }
 
-        Err("Gateway 启动超时，请查看 ~/.openclaw/logs/gateway.err.log".into())
+        Err(format!(
+            "Gateway 启动超时，请查看 {}",
+            log_dir.join("gateway.err.log").display()
+        ))
     }
 
     pub fn start_service_impl(label: &str) -> Result<(), String> {
@@ -568,6 +718,7 @@ mod platform {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn restart_service_impl(label: &str) -> Result<(), String> {
         let uid = current_uid()?;
         let path = plist_path(label);
@@ -892,6 +1043,12 @@ mod platform {
     }
 
     fn check_cli_installed_inner() -> bool {
+        if let Some(path) = crate::utils::resolve_openclaw_cli_path() {
+            if Path::new(&path).exists() {
+                return true;
+            }
+        }
+
         // 方式1: 检查常见文件路径（零进程，最快）
         for path in candidate_cli_paths() {
             if path.exists() {
@@ -1020,17 +1177,14 @@ mod platform {
             ));
         }
 
-        let enhanced = crate::commands::enhanced_path();
         let (stdout_log, stderr_log) = create_gateway_log_files()?;
 
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/c", "openclaw", "gateway"])
-            .env("PATH", &enhanced)
+        let mut cmd = crate::utils::openclaw_command();
+        cmd.arg("gateway")
             .creation_flags(CREATE_NO_WINDOW)
             .stdin(Stdio::null())
             .stdout(stdout_log)
             .stderr(stderr_log);
-        crate::commands::apply_proxy_env(&mut cmd);
 
         // 记录 spawn 前的已知 PID
         let before_pid = *LAST_KNOWN_GATEWAY_PID.lock().unwrap();
@@ -1143,6 +1297,7 @@ mod platform {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn restart_service_impl(_label: &str) -> Result<(), String> {
         stop_service_impl(_label).await?;
         start_service_impl(_label).await
@@ -1403,13 +1558,20 @@ mod platform {
             }
         }
 
-        Err("Gateway 启动超时，请查看 ~/.openclaw/logs/gateway.err.log".into())
+        Err(format!(
+            "Gateway 启动超时，请查看 {}",
+            crate::commands::openclaw_dir()
+                .join("logs")
+                .join("gateway.err.log")
+                .display()
+        ))
     }
 
     pub async fn stop_service_impl(_label: &str) -> Result<(), String> {
         gateway_command("stop").await
     }
 
+    #[allow(dead_code)]
     pub async fn restart_service_impl(_label: &str) -> Result<(), String> {
         gateway_command("restart").await
     }
@@ -1449,17 +1611,23 @@ pub async fn get_services_status() -> Result<Vec<ServiceStatus>, String> {
 
     let mut results = Vec::new();
     for label in labels.iter().map(String::as_str) {
-        // Windows 使用 platform::check_service_status（含真实 PID 检测）
-        #[cfg(target_os = "windows")]
-        let (running, pid) = platform::check_service_status(_uid, label);
-        #[cfg(not(target_os = "windows"))]
-        let (running, pid) = check_tcp_service_status(_uid, label);
+        let (running, pid) = current_gateway_runtime(label).await;
+        let owned_by_current_instance = running && is_gateway_owned_by_current_instance(pid);
+        let ownership = if !running {
+            Some("stopped".to_string())
+        } else if owned_by_current_instance {
+            Some("owned".to_string())
+        } else {
+            Some("foreign".to_string())
+        };
         results.push(ServiceStatus {
             label: label.to_string(),
             pid,
             running,
             description: desc_map.get(label).unwrap_or(&"").to_string(),
             cli_installed,
+            ownership,
+            owned_by_current_instance: Some(owned_by_current_instance),
         });
     }
 
@@ -1468,18 +1636,33 @@ pub async fn get_services_status() -> Result<Vec<ServiceStatus>, String> {
 
 #[tauri::command]
 pub async fn start_service(label: String) -> Result<(), String> {
+    let (running, pid) = current_gateway_runtime(&label).await;
+    if running {
+        ensure_owned_gateway_or_err(pid)?;
+        write_gateway_owner(pid)?;
+        guardian_mark_manual_start();
+        return Ok(());
+    }
     guardian_mark_manual_start();
     start_service_impl_internal(&label).await
 }
 
 #[tauri::command]
 pub async fn stop_service(label: String) -> Result<(), String> {
+    let (running, pid) = current_gateway_runtime(&label).await;
+    if running {
+        ensure_owned_gateway_or_err(pid)?;
+    }
     guardian_mark_manual_stop();
     stop_service_impl_internal(&label).await
 }
 
 #[tauri::command]
 pub async fn restart_service(label: String) -> Result<(), String> {
+    let (running, pid) = current_gateway_runtime(&label).await;
+    if running {
+        ensure_owned_gateway_or_err(pid)?;
+    }
     guardian_pause("manual restart");
     guardian_mark_manual_start();
     let result = restart_service_impl_internal(&label).await;

@@ -120,6 +120,128 @@ fn put_csv_array_from_form(entry: &mut Map<String, Value>, key: &str, raw: &str)
     }
 }
 
+fn normalize_binding_match_value(value: &Value) -> Option<Value> {
+    match value {
+        Value::Null => None,
+        Value::String(s) => Some(Value::String(s.trim().to_string())),
+        Value::Array(items) => {
+            let mut normalized: Vec<Value> = items
+                .iter()
+                .filter_map(normalize_binding_match_value)
+                .collect();
+            if normalized.iter().all(|item| item.as_str().is_some()) {
+                normalized.sort_by(|a, b| a.as_str().unwrap().cmp(b.as_str().unwrap()));
+            }
+            Some(Value::Array(normalized))
+        }
+        Value::Object(map) => {
+            let mut result = Map::new();
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+
+            for key in keys {
+                let Some(item) = map.get(key) else {
+                    continue;
+                };
+
+                if key == "peer" {
+                    if let Some(peer_id) = item.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                        result.insert("peer".into(), json!({ "kind": "direct", "id": peer_id }));
+                    } else if let Some(peer_obj) = item.as_object() {
+                        let kind = peer_obj
+                            .get("kind")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or("direct");
+                        let id = peer_obj
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty());
+                        if let Some(peer_id) = id {
+                            result.insert("peer".into(), json!({ "kind": kind, "id": peer_id }));
+                        }
+                    }
+                    continue;
+                }
+
+                let Some(normalized) = normalize_binding_match_value(item) else {
+                    continue;
+                };
+                if key == "accountId"
+                    && normalized.as_str().map(|s| s.is_empty()).unwrap_or(false)
+                {
+                    continue;
+                }
+                if normalized.as_str().map(|s| s.is_empty()).unwrap_or(false) {
+                    continue;
+                }
+                result.insert(key.clone(), normalized);
+            }
+
+            Some(Value::Object(result))
+        }
+        _ => Some(value.clone()),
+    }
+}
+
+fn build_binding_match(channel: &str, account_id: Option<&str>, binding_config: &Value) -> Value {
+    let mut match_config = Map::new();
+    match_config.insert("channel".into(), Value::String(channel.to_string()));
+
+    if let Some(acct) = account_id.map(str::trim).filter(|s| !s.is_empty()) {
+        match_config.insert("accountId".into(), Value::String(acct.to_string()));
+    }
+
+    if let Some(config_obj) = binding_config.as_object() {
+        for (k, v) in config_obj {
+            if k == "peer" {
+                if let Some(peer_str) = v.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                    match_config.insert("peer".into(), json!({ "kind": "direct", "id": peer_str }));
+                } else if let Some(peer_obj) = v.as_object() {
+                    let kind = peer_obj
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("direct");
+                    let id = peer_obj
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty());
+                    if let Some(peer_id) = id {
+                        match_config.insert("peer".into(), json!({ "kind": kind, "id": peer_id }));
+                    }
+                }
+            } else if k != "accountId" && k != "channel" && !v.is_null() {
+                match_config.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    normalize_binding_match_value(&Value::Object(match_config))
+        .unwrap_or_else(|| Value::Object(Map::new()))
+}
+
+fn binding_identity_matches(binding: &Value, agent_id: &str, target_match: &Value) -> bool {
+    let binding_agent = binding
+        .get("agentId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("main");
+    if binding_agent != agent_id {
+        return false;
+    }
+
+    let existing_match = normalize_binding_match_value(binding.get("match").unwrap_or(&Value::Null))
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    let expected_match = normalize_binding_match_value(target_match)
+        .unwrap_or_else(|| Value::Object(Map::new()));
+
+    existing_match == expected_match
+}
+
 fn gateway_auth_mode(cfg: &Value) -> Option<&str> {
     cfg.get("gateway")
         .and_then(|g| g.get("auth"))
@@ -3237,81 +3359,19 @@ pub async fn save_agent_binding(
         serde_json::Value::String(agent_id.clone()),
     );
 
-    // 构建 match 配置
-    let mut match_config = serde_json::Map::new();
-    match_config.insert(
-        "channel".to_string(),
-        serde_json::Value::String(channel.clone()),
-    );
-    if let Some(ref acct) = account_id {
-        if !acct.is_empty() {
-            match_config.insert(
-                "accountId".to_string(),
-                serde_json::Value::String(acct.clone()),
-            );
-        }
-    }
+    let target_match = build_binding_match(&channel, account_id.as_deref(), &binding_config);
 
-    // 合并用户提供的配置到 match 中
-    if let Some(config_obj) = binding_config.as_object() {
-        for (k, v) in config_obj {
-            if k == "peer" {
-                // peer 写入 match.peer（OpenClaw schema 要求）
-                if let Some(peer_str) = v.as_str().filter(|s| !s.is_empty()) {
-                    match_config.insert(
-                        "peer".to_string(),
-                        serde_json::json!({ "kind": "direct", "id": peer_str }),
-                    );
-                } else if let Some(peer_obj) = v.as_object() {
-                    let kind = peer_obj
-                        .get("kind")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("direct");
-                    let id = peer_obj
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .filter(|s| !s.is_empty());
-                    if let Some(id_val) = id {
-                        match_config.insert(
-                            "peer".to_string(),
-                            serde_json::json!({ "kind": kind, "id": id_val }),
-                        );
-                    }
-                }
-            } else if k == "accountId" || k == "channel" {
-                // 这两个已有专门逻辑处理，跳过
-            } else {
-                match_config.insert(k.clone(), v.clone());
-            }
-        }
-    }
-
-    new_binding.insert("match".to_string(), serde_json::Value::Object(match_config));
+    new_binding.insert("match".to_string(), target_match.clone());
 
     // 先转换为 Value，避免在循环中移动
     let binding_value = serde_json::Value::Object(new_binding);
 
-    // 检查是否已存在相同 agentId + channel + accountId 的绑定，如有则更新
     let mut found = false;
     for binding in bindings_arr.iter_mut() {
-        if let (Some(existing_agent), Some(existing_channel), Some(existing_match)) = (
-            binding.get("agentId").and_then(|v| v.as_str()),
-            binding
-                .get("match")
-                .and_then(|m| m.get("channel"))
-                .and_then(|v| v.as_str()),
-            binding.get("match"),
-        ) {
-            if existing_agent == agent_id && existing_channel == channel {
-                // 检查 accountId 是否匹配
-                let existing_account = existing_match.get("accountId").and_then(|v| v.as_str());
-                if existing_account == account_id.as_deref() {
-                    *binding = binding_value.clone();
-                    found = true;
-                    break;
-                }
-            }
+        if binding_identity_matches(binding, &agent_id, &target_match) {
+            *binding = binding_value.clone();
+            found = true;
+            break;
         }
     }
 
@@ -3343,62 +3403,22 @@ pub async fn delete_agent_binding(
     agent_id: String,
     channel: String,
     account_id: Option<String>,
+    binding_config: Option<serde_json::Value>,
     app: tauri::AppHandle,
 ) -> Result<serde_json::Value, String> {
     let mut cfg = super::config::load_openclaw_json()?;
+    let target_match = build_binding_match(
+        &channel,
+        account_id.as_deref(),
+        binding_config.as_ref().unwrap_or(&Value::Null),
+    );
 
     let Some(bindings) = cfg.get_mut("bindings").and_then(|b| b.as_array_mut()) else {
         return Ok(serde_json::json!({ "ok": true }));
     };
 
     let original_len = bindings.len();
-    bindings.retain(|b| {
-        // 检查是否是该 agent 的绑定
-        if b.get("agentId")
-            .and_then(|v| v.as_str())
-            .map(|id| id != agent_id)
-            .unwrap_or(true)
-        {
-            return true; // 保留非该 agent 的绑定
-        }
-
-        // 检查 channel 是否匹配
-        let match_obj = match b.get("match").and_then(|m| m.as_object()) {
-            Some(m) => m,
-            None => return true, // 保留无效格式
-        };
-
-        let binding_channel = match_obj.get("channel").and_then(|v| v.as_str());
-        if binding_channel != Some(&channel) {
-            return true; // 保留不匹配 channel 的绑定
-        }
-
-        let binding_acct = match_obj
-            .get("accountId")
-            .and_then(|v| v.as_str())
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
-
-        match account_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(acct) => {
-                if binding_acct != Some(acct) {
-                    return true;
-                }
-            }
-            None => {
-                // 未指定 account：只删默认绑定（无 accountId 或空）
-                if binding_acct.is_some() {
-                    return true;
-                }
-            }
-        }
-
-        false // 删除这个绑定
-    });
+    bindings.retain(|b| !binding_identity_matches(b, &agent_id, &target_match));
 
     let removed = original_len - bindings.len();
     if removed == 0 {

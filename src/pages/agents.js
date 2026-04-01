@@ -17,6 +17,7 @@ export async function render() {
       <div>
         <h1 class="page-title">${t('agents.title')}</h1>
         <p class="page-desc">${t('agents.desc')}</p>
+        <p class="page-subhint">${t('agents.detailHint')}</p>
       </div>
       <div class="page-actions">
         <button class="btn btn-primary" id="btn-add-agent">${t('agents.addAgent')}</button>
@@ -107,6 +108,7 @@ function renderAgents(page, state) {
             ${isDefault ? `<span class="badge badge-success">${t('agents.default')}</span>` : ''}
           </div>
           <div class="agent-card-actions">
+            <button class="btn btn-sm btn-primary" data-action="detail" data-id="${a.id}">${t('agents.detail')}</button>
             <button class="btn btn-sm btn-secondary" data-action="backup" data-id="${a.id}">${t('agents.backup')}</button>
             <button class="btn btn-sm btn-secondary" data-action="edit" data-id="${a.id}">${t('agents.edit')}</button>
             ${!isDefault ? `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${a.id}">${t('agents.delete')}</button>` : ''}
@@ -139,13 +141,21 @@ function attachAgentEvents(page, state) {
   const container = page.querySelector('#agents-list')
   container.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]')
-    if (!btn) return
-    const action = btn.dataset.action
-    const id = btn.dataset.id
-
-    if (action === 'edit') showEditAgentDialog(page, state, id)
-    else if (action === 'delete') await deleteAgent(page, state, id)
-    else if (action === 'backup') await backupAgent(id)
+    if (btn) {
+      const action = btn.dataset.action
+      const id = btn.dataset.id
+      if (action === 'detail') location.hash = `#/agent-detail?id=${encodeURIComponent(id)}`
+      else if (action === 'edit') showEditAgentDialog(page, state, id)
+      else if (action === 'delete') await deleteAgent(page, state, id)
+      else if (action === 'backup') await backupAgent(id)
+      return
+    }
+    // 点击卡片空白区域 → 进入详情页
+    const card = e.target.closest('.agent-card')
+    if (card) {
+      const id = card.dataset.id
+      if (id) location.hash = `#/agent-detail?id=${encodeURIComponent(id)}`
+    }
   })
 }
 
